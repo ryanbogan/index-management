@@ -1,38 +1,22 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.resthandler
 
+import org.opensearch.common.xcontent.XContentFactory
 import org.opensearch.indexmanagement.IndexManagementPlugin
 import org.opensearch.indexmanagement.indexstatemanagement.IndexStateManagementRestTestCase
 import org.opensearch.indexmanagement.indexstatemanagement.model.ChangePolicy
-import org.opensearch.indexmanagement.indexstatemanagement.model.ManagedIndexMetaData
-import org.opensearch.indexmanagement.indexstatemanagement.model.managedindexmetadata.PolicyRetryInfoMetaData
-import org.opensearch.indexmanagement.indexstatemanagement.model.managedindexmetadata.StateMetaData
+import org.opensearch.indexmanagement.indexstatemanagement.util.SHOW_POLICY_QUERY_PARAM
+import org.opensearch.indexmanagement.indexstatemanagement.util.TOTAL_MANAGED_INDICES
+import org.opensearch.indexmanagement.indexstatemanagement.util.XCONTENT_WITHOUT_TYPE_AND_USER
 import org.opensearch.indexmanagement.makeRequest
+import org.opensearch.indexmanagement.opensearchapi.toMap
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ManagedIndexMetaData
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.PolicyRetryInfoMetaData
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.StateMetaData
 import org.opensearch.indexmanagement.waitFor
 import org.opensearch.rest.RestRequest
 import org.opensearch.rest.RestStatus
@@ -47,9 +31,11 @@ class RestExplainActionIT : IndexStateManagementRestTestCase() {
         val indexName = "${testIndexName}_movies"
         createIndex(indexName, null)
         val expected = mapOf(
-            indexName to mapOf<String, String?>(
+            TOTAL_MANAGED_INDICES to 0,
+            indexName to mapOf<String, Any?>(
                 explainResponseOpendistroPolicyIdSetting to null,
-                explainResponseOpenSearchPolicyIdSetting to null
+                explainResponseOpenSearchPolicyIdSetting to null,
+                ManagedIndexMetaData.ENABLED to null
             )
         )
         assertResponseMap(expected, getExplainMap(indexName))
@@ -73,16 +59,19 @@ class RestExplainActionIT : IndexStateManagementRestTestCase() {
         createIndex(indexName2, null)
 
         val expected = mapOf(
+            TOTAL_MANAGED_INDICES to 1,
             indexName1 to mapOf<String, Any>(
                 explainResponseOpendistroPolicyIdSetting to policy.id,
                 explainResponseOpenSearchPolicyIdSetting to policy.id,
                 "index" to indexName1,
                 "index_uuid" to getUuid(indexName1),
-                "policy_id" to policy.id
+                "policy_id" to policy.id,
+                ManagedIndexMetaData.ENABLED to true
             ),
             indexName2 to mapOf<String, Any?>(
                 explainResponseOpendistroPolicyIdSetting to null,
-                explainResponseOpenSearchPolicyIdSetting to null
+                explainResponseOpenSearchPolicyIdSetting to null,
+                ManagedIndexMetaData.ENABLED to null
             )
         )
         waitFor {
@@ -123,27 +112,139 @@ class RestExplainActionIT : IndexStateManagementRestTestCase() {
         createIndex(indexName2, policyID = policy.id)
         createIndex(indexName3, null)
         val expected = mapOf(
+            TOTAL_MANAGED_INDICES to 2,
             indexName1 to mapOf<String, Any>(
                 explainResponseOpendistroPolicyIdSetting to policy.id,
                 explainResponseOpenSearchPolicyIdSetting to policy.id,
                 "index" to indexName1,
                 "index_uuid" to getUuid(indexName1),
-                "policy_id" to policy.id
+                "policy_id" to policy.id,
+                ManagedIndexMetaData.ENABLED to true
             ),
             indexName2 to mapOf<String, Any>(
                 explainResponseOpendistroPolicyIdSetting to policy.id,
                 explainResponseOpenSearchPolicyIdSetting to policy.id,
                 "index" to indexName2,
                 "index_uuid" to getUuid(indexName2),
-                "policy_id" to policy.id
+                "policy_id" to policy.id,
+                ManagedIndexMetaData.ENABLED to true
             ),
             indexName3 to mapOf<String, Any?>(
                 explainResponseOpendistroPolicyIdSetting to null,
-                explainResponseOpenSearchPolicyIdSetting to null
+                explainResponseOpenSearchPolicyIdSetting to null,
+                ManagedIndexMetaData.ENABLED to null
             )
         )
         waitFor {
             assertResponseMap(expected, getExplainMap("$indexName1*"))
+        }
+    }
+
+    fun `test search query string`() {
+        val indexName1 = "$testIndexName-search-query-string"
+        val indexName2 = "$indexName1-testing-2"
+        val indexName3 = "$indexName1-testing-3"
+        val indexName4 = "$indexName1-testing-4-2022-02-15"
+        val indexName5 = "$indexName1-testing-5-15-02-2022"
+        val dataStreamName = "$indexName1-data-stream"
+        createDataStream(dataStreamName)
+
+        val policy = createRandomPolicy()
+        createIndex(indexName1, policyID = policy.id)
+        createIndex(indexName2, policyID = policy.id)
+        createIndex(indexName3, null)
+        createIndex(indexName4, policyID = policy.id)
+        createIndex(indexName5, policyID = policy.id)
+        addPolicyToIndex(dataStreamName, policy.id)
+        val indexName1Map = indexName1 to mapOf<String, Any>(
+            explainResponseOpendistroPolicyIdSetting to policy.id,
+            explainResponseOpenSearchPolicyIdSetting to policy.id,
+            "index" to indexName1,
+            "index_uuid" to getUuid(indexName1),
+            "policy_id" to policy.id,
+            "enabled" to true
+        )
+        val indexName2Map = indexName2 to mapOf<String, Any>(
+            explainResponseOpendistroPolicyIdSetting to policy.id,
+            explainResponseOpenSearchPolicyIdSetting to policy.id,
+            "index" to indexName2,
+            "index_uuid" to getUuid(indexName2),
+            "policy_id" to policy.id,
+            "enabled" to true
+        )
+        val indexName4Map = indexName4 to mapOf<String, Any>(
+            explainResponseOpendistroPolicyIdSetting to policy.id,
+            explainResponseOpenSearchPolicyIdSetting to policy.id,
+            "index" to indexName4,
+            "index_uuid" to getUuid(indexName4),
+            "policy_id" to policy.id,
+            "enabled" to true
+        )
+        val indexName5Map = indexName5 to mapOf<String, Any>(
+            explainResponseOpendistroPolicyIdSetting to policy.id,
+            explainResponseOpenSearchPolicyIdSetting to policy.id,
+            "index" to indexName5,
+            "index_uuid" to getUuid(indexName5),
+            "policy_id" to policy.id,
+            "enabled" to true
+        )
+        val datastreamMap = ".ds-$dataStreamName-000001" to mapOf<String, Any>(
+            explainResponseOpendistroPolicyIdSetting to policy.id,
+            explainResponseOpenSearchPolicyIdSetting to policy.id,
+            "index" to ".ds-$dataStreamName-000001",
+            "index_uuid" to getUuid(".ds-$dataStreamName-000001"),
+            "policy_id" to policy.id,
+            "enabled" to true
+        )
+
+        waitFor {
+            val expected = mapOf(
+                indexName1Map,
+                indexName2Map,
+                indexName4Map,
+                indexName5Map,
+                "total_managed_indices" to 4
+            )
+            // These should match all non datastream managed indices
+            assertResponseMap(expected, getExplainMap(indexName = null, queryParams = "queryString=$testIndexName*"))
+            assertResponseMap(expected, getExplainMap(indexName = null, queryParams = "queryString=$testIndexName-*"))
+            assertResponseMap(expected, getExplainMap(indexName = null, queryParams = "queryString=$testIndexName-search-*"))
+        }
+
+        waitFor {
+            val expected = mapOf(
+                indexName1Map,
+                indexName2Map,
+                indexName4Map,
+                indexName5Map,
+                datastreamMap,
+                "total_managed_indices" to 5
+            )
+            // These should match all managed indices including datastreams
+            assertResponseMap(expected, getExplainMap(indexName = null, queryParams = "queryString=*$testIndexName-*"))
+            assertResponseMap(expected, getExplainMap(indexName = null, queryParams = "queryString=*search*"))
+            assertResponseMap(expected, getExplainMap(indexName = null, queryParams = "queryString=*search-query*"))
+        }
+
+        waitFor {
+            val expected = mapOf(
+                datastreamMap,
+                "total_managed_indices" to 1
+            )
+            // These should match all datastream managed indices (and system/hidden indices)
+            assertResponseMap(expected, getExplainMap(indexName = null, queryParams = "queryString=.*"))
+            assertResponseMap(expected, getExplainMap(indexName = null, queryParams = "queryString=.ds-$testIndexName-*"))
+        }
+
+        waitFor {
+            val expected = mapOf(
+                indexName4Map,
+                "total_managed_indices" to 1
+            )
+            // These should match all just the single index, and validates that it does not match the 15-02-2022 index
+            // i.e. if it was still matching on tokens then ["2022", "02", "15"] would match both which we don't want
+            assertResponseMap(expected, getExplainMap(indexName = null, queryParams = "queryString=*2022-02-15"))
+            assertResponseMap(expected, getExplainMap(indexName = null, queryParams = "queryString=*2022-02-15*"))
         }
     }
 
@@ -169,6 +270,7 @@ class RestExplainActionIT : IndexStateManagementRestTestCase() {
                         ManagedIndexMetaData.POLICY_ID to managedIndexConfig.policyID::equals,
                         ManagedIndexMetaData.POLICY_SEQ_NO to policy.seqNo.toInt()::equals,
                         ManagedIndexMetaData.POLICY_PRIMARY_TERM to policy.primaryTerm.toInt()::equals,
+                        ManagedIndexMetaData.INDEX_CREATION_DATE to fun(indexCreationDate: Any?): Boolean = (indexCreationDate as Long) > 1L,
                         StateMetaData.STATE to fun(stateMetaDataMap: Any?): Boolean =
                             assertStateEquals(
                                 StateMetaData(policy.defaultState, Instant.now().toEpochMilli()),
@@ -176,7 +278,8 @@ class RestExplainActionIT : IndexStateManagementRestTestCase() {
                             ),
                         PolicyRetryInfoMetaData.RETRY_INFO to fun(retryInfoMetaDataMap: Any?): Boolean =
                             assertRetryInfoEquals(PolicyRetryInfoMetaData(false, 0), retryInfoMetaDataMap),
-                        ManagedIndexMetaData.INFO to fun(info: Any?): Boolean = expectedInfoString == info.toString()
+                        ManagedIndexMetaData.INFO to fun(info: Any?): Boolean = expectedInfoString == info.toString(),
+                        ManagedIndexMetaData.ENABLED to true::equals
                     )
                 ),
                 getExplainMap(indexName)
@@ -216,11 +319,36 @@ class RestExplainActionIT : IndexStateManagementRestTestCase() {
                         ManagedIndexMetaData.POLICY_ID to newPolicy.id::equals,
                         PolicyRetryInfoMetaData.RETRY_INFO to fun(retryInfoMetaDataMap: Any?): Boolean =
                             assertRetryInfoEquals(PolicyRetryInfoMetaData(true, 0), retryInfoMetaDataMap),
-                        ManagedIndexMetaData.INFO to fun(info: Any?): Boolean = expectedInfoString == info.toString()
+                        ManagedIndexMetaData.INFO to fun(info: Any?): Boolean = expectedInfoString == info.toString(),
+                        ManagedIndexMetaData.INDEX_CREATION_DATE to fun(indexCreationDate: Any?): Boolean = (indexCreationDate as Long) > 1L,
+                        ManagedIndexMetaData.ENABLED to true::equals
                     )
                 ),
                 getExplainMap(indexName)
             )
+        }
+    }
+
+    fun `test show_applied_policy query parameter`() {
+        val indexName = "${testIndexName}_show_applied_policy"
+        val policy = createRandomPolicy()
+        createIndex(indexName, policy.id)
+
+        val expectedPolicy = policy.toXContent(XContentFactory.jsonBuilder(), XCONTENT_WITHOUT_TYPE_AND_USER).toMap()
+        val expected = mapOf(
+            indexName to mapOf<String, Any>(
+                explainResponseOpendistroPolicyIdSetting to policy.id,
+                explainResponseOpenSearchPolicyIdSetting to policy.id,
+                "index" to indexName,
+                "index_uuid" to getUuid(indexName),
+                "policy_id" to policy.id,
+                ManagedIndexMetaData.ENABLED to true,
+                "policy" to expectedPolicy
+            ),
+            TOTAL_MANAGED_INDICES to 1,
+        )
+        waitFor {
+            assertResponseMap(expected, getExplainMap(indexName, queryParams = SHOW_POLICY_QUERY_PARAM))
         }
     }
 

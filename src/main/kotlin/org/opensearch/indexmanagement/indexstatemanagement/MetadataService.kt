@@ -1,34 +1,16 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement
 
 import org.apache.logging.log4j.LogManager
 import org.opensearch.ExceptionsHelper
+import org.opensearch.action.ActionListener
 import org.opensearch.action.DocWriteRequest
+import org.opensearch.action.admin.cluster.settings.ClusterUpdateSettingsRequest
+import org.opensearch.action.admin.cluster.settings.ClusterUpdateSettingsResponse
 import org.opensearch.action.bulk.BackoffPolicy
 import org.opensearch.action.bulk.BulkItemResponse
 import org.opensearch.action.bulk.BulkRequest
@@ -36,16 +18,19 @@ import org.opensearch.action.bulk.BulkResponse
 import org.opensearch.action.support.master.AcknowledgedResponse
 import org.opensearch.client.Client
 import org.opensearch.cluster.service.ClusterService
+import org.opensearch.common.settings.Settings
 import org.opensearch.common.unit.TimeValue
 import org.opensearch.index.Index
 import org.opensearch.indexmanagement.IndexManagementIndices
 import org.opensearch.indexmanagement.indexstatemanagement.opensearchapi.getManagedIndexMetadata
+import org.opensearch.indexmanagement.indexstatemanagement.settings.ManagedIndexSettings
 import org.opensearch.indexmanagement.indexstatemanagement.transport.action.updateindexmetadata.UpdateManagedIndexMetaDataAction
 import org.opensearch.indexmanagement.indexstatemanagement.transport.action.updateindexmetadata.UpdateManagedIndexMetaDataRequest
 import org.opensearch.indexmanagement.indexstatemanagement.util.managedIndexMetadataIndexRequest
 import org.opensearch.indexmanagement.indexstatemanagement.util.revertManagedIndexMetadataID
 import org.opensearch.indexmanagement.opensearchapi.retry
 import org.opensearch.indexmanagement.opensearchapi.suspendUntil
+import org.opensearch.indexmanagement.util.IndexManagementException
 import org.opensearch.indexmanagement.util.OpenForTesting
 import org.opensearch.rest.RestStatus
 import java.lang.Exception
@@ -55,6 +40,7 @@ import java.lang.Exception
  * MetadataService starts to move metadata from cluster state to config index
  */
 @OpenForTesting
+@Suppress("MagicNumber", "ReturnCount", "LongMethod", "ComplexMethod")
 class MetadataService(
     private val client: Client,
     private val clusterService: ClusterService,
@@ -65,22 +51,23 @@ class MetadataService(
 
     @Volatile private var runningLock = false // in case 2 moveMetadata() process running
 
-    private val successfullyIndexedIndices = mutableSetOf<metadataDocID>()
-    private var failedToIndexIndices = mutableMapOf<metadataDocID, BulkItemResponse.Failure>()
+    private val successfullyIndexedIndices = mutableSetOf<MetadataDocID>()
+    private var failedToIndexIndices = mutableMapOf<MetadataDocID, BulkItemResponse.Failure>()
     private var failedToCleanIndices = mutableSetOf<Index>()
 
     private var counter = 0
+    final var runTimeCounter = 1
+        private set
+    private val maxRunTime = 10
 
     // used in coordinator sweep to cancel scheduled process
     @Volatile final var finishFlag = false
         private set
     fun reenableMetadataService() { finishFlag = false }
 
-    @Suppress("MagicNumber")
     @Volatile private var retryPolicy =
         BackoffPolicy.constantBackoff(TimeValue.timeValueMillis(50), 3)
 
-    @Suppress("ReturnCount", "LongMethod", "ComplexMethod")
     suspend fun moveMetadata() {
         if (runningLock) {
             logger.info("There is a move metadata process running...")
@@ -98,6 +85,19 @@ class MetadataService(
                 return
             }
 
+            if (!imIndices.indexManagementIndexExists()) {
+                logger.info("ISM config index not exist, so we cancel the metadata migration job.")
+                finishFlag = true; runningLock = false; runTimeCounter = 0
+                return
+            }
+
+            if (runTimeCounter > maxRunTime) {
+                updateStatusSetting(-1)
+                finishFlag = true; runningLock = false; runTimeCounter = 0
+                return
+            }
+            logger.info("Doing metadata migration $runTimeCounter time.")
+
             val indicesMetadata = clusterService.state().metadata.indices
             var clusterStateManagedIndexMetadata = indicesMetadata.map {
                 it.key to it.value.getManagedIndexMetadata()
@@ -105,18 +105,35 @@ class MetadataService(
             // filter out previous failedToClean indices which already been indexed
             clusterStateManagedIndexMetadata =
                 clusterStateManagedIndexMetadata.filter { it.key !in failedToCleanIndices.map { index -> index.name } }
-            val indexUuidMap = clusterStateManagedIndexMetadata.map { indicesMetadata[it.key].indexUUID to it.key }.toMap()
+
+            // filter out cluster state metadata with outdated index uuid
+            val corruptManagedIndices = mutableListOf<Index>()
+            val indexUuidMap = mutableMapOf<IndexUuid, IndexName>()
+            clusterStateManagedIndexMetadata.forEach { (indexName, metadata) ->
+                val indexMetadata = indicesMetadata[indexName]
+                val currentIndexUuid = indexMetadata.indexUUID
+                if (currentIndexUuid != metadata?.indexUuid) {
+                    corruptManagedIndices.add(indexMetadata.index)
+                } else {
+                    indexUuidMap[currentIndexUuid] = indexName
+                }
+            }
+            logger.info("Corrupt managed indices with outdated index uuid in metadata: $corruptManagedIndices")
+            clusterStateManagedIndexMetadata = clusterStateManagedIndexMetadata.filter { (indexName, _) ->
+                indexName !in corruptManagedIndices.map { it.name }
+            }
 
             if (clusterStateManagedIndexMetadata.isEmpty()) {
+                if (counter++ > 2 && corruptManagedIndices.isEmpty()) {
+                    logger.info("Move Metadata succeed, set finish flag to true. Indices failed to get indexed: $failedToIndexIndices")
+                    updateStatusSetting(1)
+                    finishFlag = true; runningLock = false; runTimeCounter = 0
+                    return
+                }
                 if (failedToCleanIndices.isNotEmpty()) {
                     logger.info("Failed to clean indices: $failedToCleanIndices. Only clean cluster state metadata in this run.")
                     cleanMetadatas(failedToCleanIndices.toList())
                     finishFlag = false; runningLock = false
-                    return
-                }
-                if (counter++ > 2) {
-                    logger.info("Move Metadata succeed, set finish flag to true. Indices failed to get indexed: $failedToIndexIndices")
-                    finishFlag = true; runningLock = false
                     return
                 }
             } else {
@@ -134,8 +151,8 @@ class MetadataService(
                 successfullyIndexedIndices.clear()
                 indexMetadatas(bulkIndexReq)
 
-                logger.debug("success indexed: ${successfullyIndexedIndices.map { indexUuidMap[it] }}")
-                logger.debug(
+                logger.info("success indexed: ${successfullyIndexedIndices.map { indexUuidMap[it] }}")
+                logger.info(
                     "failed indexed: ${failedToIndexIndices.map { indexUuidMap[it.key] }};" +
                         "failed reason: ${failedToIndexIndices.values.distinct()}"
                 )
@@ -144,12 +161,44 @@ class MetadataService(
             // clean metadata for indices which metadata already been indexed
             val indicesToCleanMetadata =
                 indexUuidMap.filter { it.key in successfullyIndexedIndices }.map { Index(it.value, it.key) }
-                    .toList() + failedToCleanIndices
+                    .toList() + failedToCleanIndices + corruptManagedIndices
 
             cleanMetadatas(indicesToCleanMetadata)
-            logger.debug("Failed to clean cluster metadata for: ${failedToCleanIndices.map { it.name }}")
+            if (failedToCleanIndices.isNotEmpty()) {
+                logger.info("Failed to clean cluster metadata for: ${failedToCleanIndices.map { it.name }}")
+            }
+
+            runTimeCounter++
         } finally {
             runningLock = false
+        }
+    }
+
+    private suspend fun updateStatusSetting(status: Int) {
+        val newSetting = Settings.builder().put(ManagedIndexSettings.METADATA_SERVICE_STATUS.key, status)
+        val request = ClusterUpdateSettingsRequest().persistentSettings(newSetting)
+        retryPolicy.retry(logger, listOf(RestStatus.INTERNAL_SERVER_ERROR)) {
+            client.admin().cluster().updateSettings(request, updateSettingListener(status))
+        }
+    }
+
+    private fun updateSettingListener(status: Int): ActionListener<ClusterUpdateSettingsResponse> {
+        return object : ActionListener<ClusterUpdateSettingsResponse> {
+            override fun onFailure(e: Exception) {
+                logger.error("Failed to update template migration setting to $status", e)
+                throw IndexManagementException.wrap(Exception("Failed to update template migration setting to $status"))
+            }
+
+            override fun onResponse(response: ClusterUpdateSettingsResponse) {
+                if (!response.isAcknowledged) {
+                    logger.error("Update template migration setting to $status is not acknowledged")
+                    throw IndexManagementException.wrap(
+                        Exception("Update template migration setting to $status is not acknowledged")
+                    )
+                } else {
+                    logger.info("Successfully update template migration setting to $status")
+                }
+            }
         }
     }
 
@@ -215,4 +264,6 @@ class MetadataService(
     }
 }
 
-typealias metadataDocID = String
+typealias MetadataDocID = String
+typealias IndexUuid = String
+typealias IndexName = String

@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.model
@@ -43,7 +22,9 @@ import org.opensearch.indexmanagement.opensearchapi.instant
 import org.opensearch.indexmanagement.opensearchapi.optionalISMTemplateField
 import org.opensearch.indexmanagement.opensearchapi.optionalTimeField
 import org.opensearch.indexmanagement.opensearchapi.optionalUserField
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ManagedIndexMetaData
 import org.opensearch.indexmanagement.util.IndexUtils
+import org.opensearch.indexmanagement.util.NO_ID
 import java.io.IOException
 import java.time.Instant
 
@@ -88,7 +69,9 @@ data class Policy(
             .field(SCHEMA_VERSION_FIELD, schemaVersion)
             .field(ERROR_NOTIFICATION_FIELD, errorNotification)
             .field(DEFAULT_STATE_FIELD, defaultState)
-            .field(STATES_FIELD, states.toTypedArray())
+            .startArray(STATES_FIELD)
+            .also { states.forEach { state -> state.toXContent(it, params) } }
+            .endArray()
             .optionalISMTemplateField(ISM_TEMPLATE, ismTemplate)
         if (params.paramAsBoolean(WITH_USER, true)) builder.optionalUserField(USER_FIELD, user)
         if (params.paramAsBoolean(WITH_TYPE, true)) builder.endObject()
@@ -135,11 +118,36 @@ data class Policy(
         user?.writeTo(out)
     }
 
+    /**
+     * Disallowed actions are ones that are not specified in the [ManagedIndexSettings.ALLOW_LIST] setting.
+     */
+    fun getDisallowedActions(allowList: List<String>): List<String> {
+        val allowListSet = allowList.toSet()
+        val disallowedActions = mutableListOf<String>()
+        this.states.forEach { state ->
+            state.actions.forEach { actionConfig ->
+                if (!allowListSet.contains(actionConfig.type)) {
+                    disallowedActions.add(actionConfig.type)
+                }
+            }
+        }
+        return disallowedActions.distinct()
+    }
+
+    fun getStateToExecute(managedIndexMetaData: ManagedIndexMetaData): State? {
+        if (managedIndexMetaData.transitionTo != null) {
+            return this.states.find { it.name == managedIndexMetaData.transitionTo }
+        }
+        return this.states.find {
+            val stateMetaData = managedIndexMetaData.stateMetaData
+            stateMetaData != null && it.name == stateMetaData.name
+        }
+    }
+
     companion object {
         const val POLICY_TYPE = "policy"
         const val POLICY_ID_FIELD = "policy_id"
         const val DESCRIPTION_FIELD = "description"
-        const val NO_ID = ""
         const val LAST_UPDATED_TIME_FIELD = "last_updated_time"
         const val SCHEMA_VERSION_FIELD = "schema_version"
         const val ERROR_NOTIFICATION_FIELD = "error_notification"

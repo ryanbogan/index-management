@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement
@@ -35,10 +14,12 @@ import org.opensearch.client.Request
 import org.opensearch.client.RequestOptions
 import org.opensearch.client.Response
 import org.opensearch.client.RestClient
+import org.opensearch.common.Strings
+import org.opensearch.common.io.PathUtils
 import org.opensearch.common.settings.Settings
+import org.opensearch.indexmanagement.indexstatemanagement.util.INDEX_HIDDEN
 import org.opensearch.rest.RestStatus
 import java.nio.file.Files
-import java.nio.file.Path
 import javax.management.MBeanServerInvocationHandler
 import javax.management.ObjectName
 import javax.management.remote.JMXConnectorFactory
@@ -46,8 +27,8 @@ import javax.management.remote.JMXServiceURL
 
 abstract class IndexManagementRestTestCase : ODFERestTestCase() {
 
-    val configSchemaVersion = 12
-    val historySchemaVersion = 3
+    val configSchemaVersion = 16
+    val historySchemaVersion = 5
 
     // Having issues with tests leaking into other tests and mappings being incorrect and they are not caught by any pending task wait check as
     // they do not go through the pending task queue. Ideally this should probably be written in a way to wait for the
@@ -58,6 +39,20 @@ abstract class IndexManagementRestTestCase : ODFERestTestCase() {
             "PUT", "_cluster/settings",
             StringEntity("""{"persistent":{"action.auto_create_index":"-.opendistro-*,*"}}""", ContentType.APPLICATION_JSON)
         )
+    }
+
+    // Tests on lower resource machines are experiencing flaky failures due to attempting to force a job to
+    // start before the job scheduler has registered the index operations listener. Initializing the index
+    // preemptively seems to give the job scheduler time to listen to operations.
+    @Before
+    fun initializeManagedIndex() {
+        if (!indexExists(IndexManagementPlugin.INDEX_MANAGEMENT_INDEX)) {
+            val request = Request("PUT", "/${IndexManagementPlugin.INDEX_MANAGEMENT_INDEX}")
+            var entity = "{\"settings\": " + Strings.toString(Settings.builder().put(INDEX_HIDDEN, true).build())
+            entity += ",\"mappings\" : ${IndexManagementIndices.indexManagementMappings}}"
+            request.setJsonEntity(entity)
+            client().performRequest(request)
+        }
     }
 
     protected val isDebuggingTest = DisableOnDebug(null).isDebugging
@@ -111,9 +106,11 @@ abstract class IndexManagementRestTestCase : ODFERestTestCase() {
      * Inserts [docCount] sample documents into [index], optionally waiting [delay] milliseconds
      * in between each insertion
      */
-    protected fun insertSampleData(index: String, docCount: Int, delay: Long = 0, jsonString: String = "{ \"test_field\": \"test_value\" }") {
-        for (i in 1..docCount) {
-            val request = Request("POST", "/$index/_doc/?refresh=true")
+    protected fun insertSampleData(index: String, docCount: Int, delay: Long = 0, jsonString: String = "{ \"test_field\": \"test_value\" }", routing: String? = null) {
+        var endpoint = "/$index/_doc/?refresh=true"
+        if (routing != null) endpoint += "&routing=$routing"
+        repeat(docCount) {
+            val request = Request("POST", endpoint)
             request.setJsonEntity(jsonString)
             client().performRequest(request)
 
@@ -139,6 +136,20 @@ abstract class IndexManagementRestTestCase : ODFERestTestCase() {
     protected fun generateNYCTaxiData(index: String = "nyc-taxi-data") {
         createIndex(index, Settings.EMPTY, """"properties":{"DOLocationID":{"type":"integer"},"RatecodeID":{"type":"integer"},"fare_amount":{"type":"float"},"tpep_dropoff_datetime":{"type":"date","format":"yyyy-MM-dd HH:mm:ss"},"congestion_surcharge":{"type":"float"},"VendorID":{"type":"integer"},"passenger_count":{"type":"integer"},"tolls_amount":{"type":"float"},"improvement_surcharge":{"type":"float"},"trip_distance":{"type":"float"},"store_and_fwd_flag":{"type":"keyword"},"payment_type":{"type":"integer"},"total_amount":{"type":"float"},"extra":{"type":"float"},"tip_amount":{"type":"float"},"mta_tax":{"type":"float"},"tpep_pickup_datetime":{"type":"date","format":"yyyy-MM-dd HH:mm:ss"},"PULocationID":{"type":"integer"}}""")
         insertSampleBulkData(index, javaClass.classLoader.getResource("data/nyc_5000.ndjson").readText())
+    }
+
+    protected fun extractFailuresFromSearchResponse(searchResponse: Response): List<Map<String, String>?>? {
+        val shards = searchResponse.asMap()["_shards"] as Map<String, ArrayList<Map<String, Any>>>
+        assertNotNull(shards)
+        val failures = shards["failures"]
+        assertNotNull(failures)
+        return failures?.let {
+            val result: ArrayList<Map<String, String>?>? = ArrayList()
+            for (failure in it) {
+                result?.add((failure as Map<String, Map<String, String>>)["reason"])
+            }
+            return result
+        }
     }
 
     companion object {
@@ -174,7 +185,7 @@ abstract class IndexManagementRestTestCase : ODFERestTestCase() {
                     false
                 )
                 proxy.getExecutionData(false)?.let {
-                    val path = Path.of("$jacocoBuildPath/integTest.exec")
+                    val path = PathUtils.get("$jacocoBuildPath/integTest.exec")
                     Files.write(path, it)
                 }
             }

@@ -1,12 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
  */
 
 package org.opensearch.indexmanagement.transform.action.preview
@@ -28,7 +22,7 @@ class PreviewTransformResponse(
         documents = sin.let {
             val documentList = mutableListOf<Map<String, Any>>()
             val size = it.readVInt()
-            for (i in 0 until size) {
+            repeat(size) { _ ->
                 documentList.add(sin.readMap()!!)
             }
             documentList.toList()

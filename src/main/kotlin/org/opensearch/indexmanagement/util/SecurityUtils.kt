@@ -1,12 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
  */
 
 package org.opensearch.indexmanagement.util
@@ -21,7 +15,7 @@ import org.opensearch.index.query.ExistsQueryBuilder
 import org.opensearch.index.query.TermsQueryBuilder
 import org.opensearch.rest.RestStatus
 
-@Suppress("ReturnCount")
+@Suppress("ReturnCount", "UtilityClassWithPublicConstructor")
 class SecurityUtils {
     companion object {
         const val INTERNAL_REQUEST = "index_management_plugin_internal_user"
@@ -41,6 +35,23 @@ class SecurityUtils {
                 null
             } else {
                 User(injectedUser.name, injectedUser.backendRoles, injectedUser.roles, injectedUser.customAttNames)
+            }
+        }
+
+        fun validateUserConfiguration(user: User?, filterEnabled: Boolean) {
+            if (filterEnabled) {
+                if (user == null) {
+                    throw IndexManagementException.wrap(
+                        OpenSearchStatusException(
+                            "Filter by user backend roles in IndexManagement is not supported with security disabled",
+                            RestStatus.FORBIDDEN
+                        )
+                    )
+                } else if (user.backendRoles.isEmpty()) {
+                    throw IndexManagementException.wrap(
+                        OpenSearchStatusException("User doesn't have backend roles configured. Contact administrator", RestStatus.FORBIDDEN)
+                    )
+                }
             }
         }
 
@@ -75,6 +86,7 @@ class SecurityUtils {
         /**
          * Check if the requested user has permission on the resource
          */
+        @Suppress("LongParameterList")
         fun <T> userHasPermissionForResource(
             requestedUser: User?,
             resourceUser: User?,
@@ -96,8 +108,26 @@ class SecurityUtils {
         }
 
         /**
+         * Check if the requested user has permission on the resource, throwing an exception if the user does not.
+         */
+        fun verifyUserHasPermissionForResource(
+            requestedUser: User?,
+            resourceUser: User?,
+            filterEnabled: Boolean = false,
+            resourceName: String,
+            resourceId: String
+        ) {
+            if (!userHasPermissionForResource(requestedUser, resourceUser, filterEnabled)) {
+                throw IndexManagementException.wrap(
+                    OpenSearchStatusException("Do not have permission for $resourceName [$resourceId]", RestStatus.FORBIDDEN)
+                )
+            }
+        }
+
+        /**
          * Check if the requested user has permission on the resource
          */
+        @Suppress("ComplexCondition")
         fun userHasPermissionForResource(
             requestedUser: User?,
             resourceUser: User?,
@@ -130,6 +160,19 @@ class SecurityUtils {
                 )
             )
             queryBuilder.filter(filterQuery)
+        }
+
+        /**
+         * Generates a user string formed by the username, backend roles, roles and requested tenants separated by '|'. This is the user
+         * string format used internally in the OPENSEARCH_SECURITY_USER_INFO_THREAD_CONTEXT and may be parsed using User.parse(<user string>).
+         */
+        fun generateUserString(user: User?): String {
+            if (user == null) return ""
+            val backendRoles = user.backendRoles.joinToString(",")
+            val roles = user.roles.joinToString(",")
+            val requestedTenant = user.requestedTenant
+            val userName = user.name
+            return "$userName|$backendRoles|$roles|$requestedTenant"
         }
     }
 }

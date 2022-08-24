@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.resthandler
@@ -29,14 +8,15 @@ package org.opensearch.indexmanagement.indexstatemanagement.resthandler
 import org.opensearch.client.ResponseException
 import org.opensearch.common.settings.Settings
 import org.opensearch.indexmanagement.indexstatemanagement.IndexStateManagementRestTestCase
+import org.opensearch.indexmanagement.indexstatemanagement.action.ReadOnlyAction
 import org.opensearch.indexmanagement.indexstatemanagement.model.ISMTemplate
 import org.opensearch.indexmanagement.indexstatemanagement.model.Policy
 import org.opensearch.indexmanagement.indexstatemanagement.model.State
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ReadOnlyActionConfig
 import org.opensearch.indexmanagement.indexstatemanagement.randomErrorNotification
 import org.opensearch.indexmanagement.indexstatemanagement.randomPolicy
 import org.opensearch.indexmanagement.indexstatemanagement.util.INDEX_HIDDEN
 import org.opensearch.indexmanagement.randomInstant
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ManagedIndexMetaData
 import org.opensearch.indexmanagement.waitFor
 import org.opensearch.rest.RestStatus
 import java.time.Instant
@@ -51,6 +31,7 @@ class ISMTemplateRestAPIIT : IndexStateManagementRestTestCase() {
     private val policyID2 = "t2"
     private val policyID3 = "t3"
 
+    @Suppress("UNCHECKED_CAST")
     fun `test add template with invalid index pattern`() {
         try {
             val ismTemp = ISMTemplate(listOf(" "), 100, randomInstant())
@@ -64,6 +45,7 @@ class ISMTemplateRestAPIIT : IndexStateManagementRestTestCase() {
         }
     }
 
+    @Suppress("UNCHECKED_CAST")
     fun `test add template with self-overlapping index pattern`() {
         try {
             val ismTemp = ISMTemplate(listOf("ab*"), 100, randomInstant())
@@ -78,6 +60,7 @@ class ISMTemplateRestAPIIT : IndexStateManagementRestTestCase() {
         }
     }
 
+    @Suppress("UNCHECKED_CAST")
     fun `test add template with overlapping index pattern`() {
         try {
             val ismTemp = ISMTemplate(listOf("log*"), 100, randomInstant())
@@ -106,9 +89,9 @@ class ISMTemplateRestAPIIT : IndexStateManagementRestTestCase() {
 
         val ismTemp = ISMTemplate(listOf("log*"), 100, randomInstant())
 
-        val actionConfig = ReadOnlyActionConfig(0)
+        val action = ReadOnlyAction(0)
         val states = listOf(
-            State("ReadOnlyState", listOf(actionConfig), listOf())
+            State("ReadOnlyState", listOf(action), listOf())
         )
         val policy = Policy(
             id = policyID,
@@ -137,7 +120,8 @@ class ISMTemplateRestAPIIT : IndexStateManagementRestTestCase() {
             listOf(
                 indexName1 to listOf(
                     explainResponseOpendistroPolicyIdSetting to fun(policyID: Any?): Boolean = policyID == null,
-                    explainResponseOpenSearchPolicyIdSetting to fun(policyID: Any?): Boolean = policyID == null
+                    explainResponseOpenSearchPolicyIdSetting to fun(policyID: Any?): Boolean = policyID == null,
+                    ManagedIndexMetaData.ENABLED to fun(enabled: Any?): Boolean = enabled == null
                 )
             ),
             getExplainMap(indexName1),
@@ -150,7 +134,8 @@ class ISMTemplateRestAPIIT : IndexStateManagementRestTestCase() {
             listOf(
                 indexName1 to listOf(
                     explainResponseOpendistroPolicyIdSetting to fun(policyID: Any?): Boolean = policyID == null,
-                    explainResponseOpenSearchPolicyIdSetting to fun(policyID: Any?): Boolean = policyID == null
+                    explainResponseOpenSearchPolicyIdSetting to fun(policyID: Any?): Boolean = policyID == null,
+                    ManagedIndexMetaData.ENABLED to fun(enabled: Any?): Boolean = enabled == null
                 )
             ),
             getExplainMap(indexName1),

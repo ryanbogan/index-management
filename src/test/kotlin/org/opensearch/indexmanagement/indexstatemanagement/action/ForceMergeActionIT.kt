@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.action
@@ -31,7 +10,6 @@ import org.opensearch.common.settings.Settings
 import org.opensearch.indexmanagement.indexstatemanagement.IndexStateManagementRestTestCase
 import org.opensearch.indexmanagement.indexstatemanagement.model.Policy
 import org.opensearch.indexmanagement.indexstatemanagement.model.State
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ForceMergeActionConfig
 import org.opensearch.indexmanagement.indexstatemanagement.randomErrorNotification
 import org.opensearch.indexmanagement.indexstatemanagement.step.forcemerge.AttemptCallForceMergeStep
 import org.opensearch.indexmanagement.indexstatemanagement.step.forcemerge.AttemptSetReadOnlyStep
@@ -42,7 +20,6 @@ import java.time.temporal.ChronoUnit
 import java.util.Locale
 
 class ForceMergeActionIT : IndexStateManagementRestTestCase() {
-
     private val testIndexName = javaClass.simpleName.toLowerCase(Locale.ROOT)
 
     fun `test basic workflow`() {
@@ -50,7 +27,7 @@ class ForceMergeActionIT : IndexStateManagementRestTestCase() {
         val policyID = "${testIndexName}_testPolicyName_1"
 
         // Create a Policy with one State that only preforms a force_merge Action
-        val forceMergeActionConfig = ForceMergeActionConfig(maxNumSegments = 1, index = 0)
+        val forceMergeActionConfig = ForceMergeAction(maxNumSegments = 1, index = 0)
         val states = listOf(State("ForceMergeState", listOf(forceMergeActionConfig), listOf()))
 
         val policy = Policy(
@@ -111,7 +88,7 @@ class ForceMergeActionIT : IndexStateManagementRestTestCase() {
         val policyID = "${testIndexName}_testPolicyName_2"
 
         // Create a Policy with one State that only preforms a force_merge Action
-        val forceMergeActionConfig = ForceMergeActionConfig(maxNumSegments = 1, index = 0)
+        val forceMergeActionConfig = ForceMergeAction(maxNumSegments = 1, index = 0)
         val states = listOf(State("ForceMergeState", listOf(forceMergeActionConfig), listOf()))
 
         val policy = Policy(

@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.rollup
@@ -31,6 +10,7 @@ import org.apache.http.HttpHeaders
 import org.apache.http.entity.ContentType.APPLICATION_JSON
 import org.apache.http.entity.StringEntity
 import org.apache.http.message.BasicHeader
+import org.junit.AfterClass
 import org.opensearch.client.Response
 import org.opensearch.client.ResponseException
 import org.opensearch.common.settings.Settings
@@ -61,14 +41,18 @@ import java.time.Instant
 
 abstract class RollupRestTestCase : IndexManagementRestTestCase() {
 
-    override fun preserveIndicesUponCompletion(): Boolean = true
+    companion object {
+        @AfterClass @JvmStatic fun clearIndicesAfterClassCompletion() {
+            wipeAllIndices()
+        }
+    }
 
-    override fun preserveDataStreamsUponCompletion(): Boolean = true
+    override fun preserveIndicesUponCompletion(): Boolean = true
 
     protected fun createRollup(
         rollup: Rollup,
         rollupId: String = OpenSearchTestCase.randomAlphaOfLength(10),
-        refresh: Boolean = true
+        refresh: Boolean = true,
     ): Rollup {
         val response = createRollupJson(rollup.toJsonString(), rollupId, refresh)
 
@@ -87,7 +71,7 @@ abstract class RollupRestTestCase : IndexManagementRestTestCase() {
     protected fun createRollupJson(
         rollupString: String,
         rollupId: String,
-        refresh: Boolean = true
+        refresh: Boolean = true,
     ): Response {
         val response = client()
             .makeRequest(
@@ -149,7 +133,7 @@ abstract class RollupRestTestCase : IndexManagementRestTestCase() {
 
     protected fun getRollup(
         rollupId: String,
-        header: BasicHeader = BasicHeader(HttpHeaders.CONTENT_TYPE, "application/json")
+        header: BasicHeader = BasicHeader(HttpHeaders.CONTENT_TYPE, "application/json"),
     ): Rollup {
         val response = client().makeRequest("GET", "$ROLLUP_JOBS_BASE_URI/$rollupId", null, header)
         assertEquals("Unable to get rollup $rollupId", RestStatus.OK, response.restStatus())
@@ -177,11 +161,27 @@ abstract class RollupRestTestCase : IndexManagementRestTestCase() {
 
     protected fun getRollupMetadata(
         metadataId: String,
-        header: BasicHeader = BasicHeader(HttpHeaders.CONTENT_TYPE, "application/json")
+        refresh: Boolean = true,
+        header: BasicHeader = BasicHeader(HttpHeaders.CONTENT_TYPE, "application/json"),
     ): RollupMetadata {
-        val response = client().makeRequest("GET", "$INDEX_MANAGEMENT_INDEX/_doc/$metadataId", null, header)
+        val response = client().makeRequest("GET", "$INDEX_MANAGEMENT_INDEX/_doc/$metadataId?refresh=$refresh", null, header)
+        assertEquals("Unable to get rollup metadata $metadataId", RestStatus.OK, response.restStatus())
+        return parseRollupMetadata(response)
+    }
+
+    protected fun getRollupMetadataWithRoutingId(
+        routingId: String,
+        metadataId: String,
+        refresh: Boolean = true,
+        header: BasicHeader = BasicHeader(HttpHeaders.CONTENT_TYPE, "application/json"),
+    ): RollupMetadata {
+        val response = client().makeRequest("GET", "$INDEX_MANAGEMENT_INDEX/_doc/$metadataId?routing=$routingId&refresh=$refresh", null, header)
         assertEquals("Unable to get rollup metadata $metadataId", RestStatus.OK, response.restStatus())
 
+        return parseRollupMetadata(response)
+    }
+
+    private fun parseRollupMetadata(response: Response): RollupMetadata {
         val parser = createParser(XContentType.JSON.xContent(), response.entity.content)
         ensureExpectedToken(Token.START_OBJECT, parser.nextToken(), parser)
 

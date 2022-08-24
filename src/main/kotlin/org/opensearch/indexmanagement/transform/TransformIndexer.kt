@@ -1,12 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
  */
 
 package org.opensearch.indexmanagement.transform
@@ -25,13 +19,11 @@ import org.opensearch.action.index.IndexRequest
 import org.opensearch.client.Client
 import org.opensearch.cluster.service.ClusterService
 import org.opensearch.common.settings.Settings
-import org.opensearch.common.xcontent.XContentType
 import org.opensearch.indexmanagement.IndexManagementIndices
 import org.opensearch.indexmanagement.opensearchapi.retry
 import org.opensearch.indexmanagement.opensearchapi.suspendUntil
 import org.opensearch.indexmanagement.transform.exceptions.TransformIndexException
 import org.opensearch.indexmanagement.transform.settings.TransformSettings
-import org.opensearch.indexmanagement.util._DOC
 import org.opensearch.rest.RestStatus
 import org.opensearch.transport.RemoteTransportException
 
@@ -54,8 +46,7 @@ class TransformIndexer(
         clusterService.clusterSettings.addSettingsUpdateConsumer(
             TransformSettings.TRANSFORM_JOB_INDEX_BACKOFF_MILLIS,
             TransformSettings.TRANSFORM_JOB_INDEX_BACKOFF_COUNT
-        ) {
-            millis, count ->
+        ) { millis, count ->
             backoffPolicy = BackoffPolicy.constantBackoff(millis, count)
         }
     }
@@ -63,7 +54,7 @@ class TransformIndexer(
     private suspend fun createTargetIndex(index: String) {
         if (!clusterService.state().routingTable.hasIndex(index)) {
             val request = CreateIndexRequest(index)
-                .mapping(_DOC, IndexManagementIndices.transformTargetMappings, XContentType.JSON)
+                .mapping(IndexManagementIndices.transformTargetMappings)
             // TODO: Read in the actual mappings from the source index and use that
             val response: CreateIndexResponse = client.admin().indices().suspendUntil { create(request, it) }
             if (!response.isAcknowledged) {
@@ -73,11 +64,11 @@ class TransformIndexer(
         }
     }
 
-    @Suppress("ThrowsCount")
+    @Suppress("ThrowsCount", "RethrowCaughtException")
     suspend fun index(docsToIndex: List<DocWriteRequest<*>>): Long {
         var updatableDocsToIndex = docsToIndex
         var indexTimeInMillis = 0L
-        var nonRetryableFailures = mutableListOf<BulkItemResponse>()
+        val nonRetryableFailures = mutableListOf<BulkItemResponse>()
         try {
             if (updatableDocsToIndex.isNotEmpty()) {
                 val targetIndex = updatableDocsToIndex.first().index()

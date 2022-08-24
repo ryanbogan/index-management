@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.transport.action.explain
@@ -32,9 +11,12 @@ import org.opensearch.common.io.stream.StreamOutput
 import org.opensearch.common.xcontent.ToXContent
 import org.opensearch.common.xcontent.ToXContentObject
 import org.opensearch.common.xcontent.XContentBuilder
-import org.opensearch.indexmanagement.indexstatemanagement.model.ManagedIndexMetaData
+import org.opensearch.indexmanagement.indexstatemanagement.model.Policy
 import org.opensearch.indexmanagement.indexstatemanagement.settings.LegacyOpenDistroManagedIndexSettings
 import org.opensearch.indexmanagement.indexstatemanagement.settings.ManagedIndexSettings
+import org.opensearch.indexmanagement.indexstatemanagement.util.TOTAL_MANAGED_INDICES
+import org.opensearch.indexmanagement.indexstatemanagement.util.XCONTENT_WITHOUT_TYPE_AND_USER
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ManagedIndexMetaData
 import java.io.IOException
 
 open class ExplainResponse : ActionResponse, ToXContentObject {
@@ -43,22 +25,34 @@ open class ExplainResponse : ActionResponse, ToXContentObject {
     val indexNames: List<String>
     val indexPolicyIDs: List<String?>
     val indexMetadatas: List<ManagedIndexMetaData?>
+    val totalManagedIndices: Int
+    val enabledState: Map<String, Boolean>
+    val policies: Map<String, Policy>
 
     constructor(
         indexNames: List<String>,
         indexPolicyIDs: List<String?>,
-        indexMetadatas: List<ManagedIndexMetaData?>
+        indexMetadatas: List<ManagedIndexMetaData?>,
+        totalManagedIndices: Int,
+        enabledState: Map<String, Boolean>,
+        policies: Map<String, Policy>
     ) : super() {
         this.indexNames = indexNames
         this.indexPolicyIDs = indexPolicyIDs
         this.indexMetadatas = indexMetadatas
+        this.totalManagedIndices = totalManagedIndices
+        this.enabledState = enabledState
+        this.policies = policies
     }
 
     @Throws(IOException::class)
     constructor(sin: StreamInput) : this(
         indexNames = sin.readStringList(),
         indexPolicyIDs = sin.readStringList(),
-        indexMetadatas = sin.readList { ManagedIndexMetaData.fromStreamInput(it) }
+        indexMetadatas = sin.readList { ManagedIndexMetaData.fromStreamInput(it) },
+        totalManagedIndices = sin.readInt(),
+        enabledState = sin.readMap() as Map<String, Boolean>,
+        policies = sin.readMap(StreamInput::readString, ::Policy)
     )
 
     @Throws(IOException::class)
@@ -66,17 +60,27 @@ open class ExplainResponse : ActionResponse, ToXContentObject {
         out.writeStringCollection(indexNames)
         out.writeStringCollection(indexPolicyIDs)
         out.writeCollection(indexMetadatas)
+        out.writeInt(totalManagedIndices)
+        out.writeMap(enabledState)
+        out.writeMap(
+            policies,
+            { _out, key -> _out.writeString(key) },
+            { _out, policy -> policy.writeTo(_out) }
+        )
     }
 
     override fun toXContent(builder: XContentBuilder, params: ToXContent.Params): XContentBuilder {
         builder.startObject()
         indexNames.forEachIndexed { ind, name ->
             builder.startObject(name)
-            builder.field(LegacyOpenDistroManagedIndexSettings.POLICY_ID.key, indexPolicyIDs[ind])
             builder.field(ManagedIndexSettings.POLICY_ID.key, indexPolicyIDs[ind])
+            builder.field(LegacyOpenDistroManagedIndexSettings.POLICY_ID.key, indexPolicyIDs[ind])
             indexMetadatas[ind]?.toXContent(builder, ToXContent.EMPTY_PARAMS)
+            builder.field("enabled", enabledState[name])
+            policies[name]?.let { builder.field(Policy.POLICY_TYPE, it, XCONTENT_WITHOUT_TYPE_AND_USER) }
             builder.endObject()
         }
+        builder.field(TOTAL_MANAGED_INDICES, totalManagedIndices)
         return builder.endObject()
     }
 }

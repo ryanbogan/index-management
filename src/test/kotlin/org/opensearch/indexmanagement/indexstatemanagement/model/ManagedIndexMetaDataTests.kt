@@ -1,42 +1,23 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.model
 
 import org.opensearch.common.io.stream.InputStreamStreamInput
 import org.opensearch.common.io.stream.OutputStreamStreamOutput
-import org.opensearch.indexmanagement.indexstatemanagement.model.managedindexmetadata.ActionMetaData
-import org.opensearch.indexmanagement.indexstatemanagement.model.managedindexmetadata.ActionProperties
-import org.opensearch.indexmanagement.indexstatemanagement.model.managedindexmetadata.PolicyRetryInfoMetaData
-import org.opensearch.indexmanagement.indexstatemanagement.model.managedindexmetadata.StateMetaData
-import org.opensearch.indexmanagement.indexstatemanagement.model.managedindexmetadata.StepMetaData
-import org.opensearch.indexmanagement.indexstatemanagement.step.Step
+import org.opensearch.indexmanagement.spi.indexstatemanagement.Step
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ActionMetaData
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ActionProperties
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ManagedIndexMetaData
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.PolicyRetryInfoMetaData
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.StateMetaData
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.StepMetaData
 import org.opensearch.test.OpenSearchTestCase
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.time.Instant
 
 class ManagedIndexMetaDataTests : OpenSearchTestCase() {
 
@@ -49,6 +30,7 @@ class ManagedIndexMetaDataTests : OpenSearchTestCase() {
             policyPrimaryTerm = 1,
             policyCompleted = null,
             rolledOver = null,
+            indexCreationDate = Instant.now().toEpochMilli(),
             transitionTo = null,
             stateMetaData = StateMetaData("close-index", 1234),
             actionMetaData = null,
@@ -69,6 +51,7 @@ class ManagedIndexMetaDataTests : OpenSearchTestCase() {
             policyPrimaryTerm = 1,
             policyCompleted = null,
             rolledOver = null,
+            indexCreationDate = null,
             transitionTo = null,
             stateMetaData = StateMetaData("close-index", 1234),
             actionMetaData = ActionMetaData("close", 4321, 0, false, 0, 0, null),
@@ -89,6 +72,7 @@ class ManagedIndexMetaDataTests : OpenSearchTestCase() {
             policyPrimaryTerm = 1,
             policyCompleted = null,
             rolledOver = null,
+            indexCreationDate = null,
             transitionTo = null,
             stateMetaData = StateMetaData("close-index", 1234),
             actionMetaData = ActionMetaData("close", 4321, 0, false, 0, 0, ActionProperties(3)),
@@ -109,6 +93,7 @@ class ManagedIndexMetaDataTests : OpenSearchTestCase() {
             policyPrimaryTerm = 1,
             policyCompleted = null,
             rolledOver = false,
+            indexCreationDate = null,
             transitionTo = null,
             stateMetaData = StateMetaData("rollover-index", 1234),
             actionMetaData = ActionMetaData("rollover", 4321, 0, false, 0, 0, null),

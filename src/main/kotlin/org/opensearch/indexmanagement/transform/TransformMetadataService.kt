@@ -1,12 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
  */
 
 package org.opensearch.indexmanagement.transform
@@ -32,6 +26,7 @@ import org.opensearch.indexmanagement.IndexManagementPlugin
 import org.opensearch.indexmanagement.opensearchapi.parseWithType
 import org.opensearch.indexmanagement.opensearchapi.suspendUntil
 import org.opensearch.indexmanagement.transform.exceptions.TransformMetadataException
+import org.opensearch.indexmanagement.transform.model.ContinuousTransformStats
 import org.opensearch.indexmanagement.transform.model.Transform
 import org.opensearch.indexmanagement.transform.model.TransformMetadata
 import org.opensearch.indexmanagement.transform.model.TransformStats
@@ -75,7 +70,8 @@ class TransformMetadataService(private val client: Client, val xContentRegistry:
             transformId = transform.id,
             lastUpdatedAt = Instant.now(),
             status = TransformMetadata.Status.INIT,
-            stats = TransformStats(0, 0, 0, 0, 0)
+            stats = TransformStats(0, 0, 0, 0, 0),
+            continuousStats = if (transform.continuous) ContinuousTransformStats(null, null) else null
         )
         return writeMetadata(metadata)
     }

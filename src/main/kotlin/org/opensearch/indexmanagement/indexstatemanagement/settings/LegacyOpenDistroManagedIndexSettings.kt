@@ -1,43 +1,24 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.settings
 
 import org.opensearch.common.settings.Setting
 import org.opensearch.common.unit.TimeValue
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ActionConfig
+import org.opensearch.indexmanagement.indexstatemanagement.ISMActionsParser
 import java.util.concurrent.TimeUnit
 import java.util.function.Function
 
+@Suppress("UtilityClassWithPublicConstructor")
 class LegacyOpenDistroManagedIndexSettings {
     companion object {
         const val DEFAULT_ISM_ENABLED = true
+        const val DEFAULT_METADATA_SERVICE_STATUS = 0
         const val DEFAULT_METADATA_SERVICE_ENABLED = true
         const val DEFAULT_JOB_INTERVAL = 5
-        private val ALLOW_LIST_ALL = ActionConfig.ActionType.values().toList().map { it.type }
+        private val ALLOW_LIST_ALL = ISMActionsParser.instance.parsers.map { it.getActionType() }.toList()
         val ALLOW_LIST_NONE = emptyList<String>()
         val SNAPSHOT_DENY_LIST_NONE = emptyList<String>()
         const val HOST_DENY_LIST = "opendistro.destination.host.deny_list"
@@ -48,6 +29,28 @@ class LegacyOpenDistroManagedIndexSettings {
             Setting.Property.NodeScope,
             Setting.Property.Dynamic,
             Setting.Property.Deprecated
+        )
+
+        // 0: migration is going on
+        // 1: migration succeed
+        // -1: migration failed
+        val METADATA_SERVICE_STATUS: Setting<Int> = Setting.intSetting(
+            "opendistro.index_state_management.metadata_migration.status",
+            DEFAULT_METADATA_SERVICE_STATUS,
+            Setting.Property.NodeScope,
+            Setting.Property.Dynamic
+        )
+
+        // 0: enabled, use onClusterManager time as ISM template last_updated_time
+        // -1: migration ended successfully
+        // -2: migration ended unsuccessfully
+        // >0: use this setting (epoch millis) as ISM template last_updated_time
+        val TEMPLATE_MIGRATION_CONTROL: Setting<Long> = Setting.longSetting(
+            "opendistro.index_state_management.template_migration.control",
+            ManagedIndexSettings.DEFAULT_TEMPLATE_MIGRATION_TIMESTAMP,
+            -2L,
+            Setting.Property.NodeScope,
+            Setting.Property.Dynamic
         )
 
         val METADATA_SERVICE_ENABLED: Setting<Boolean> = Setting.boolSetting(
@@ -70,6 +73,21 @@ class LegacyOpenDistroManagedIndexSettings {
             Setting.Property.IndexScope,
             Setting.Property.Dynamic,
             Setting.Property.Deprecated
+        )
+
+        val ROLLOVER_SKIP: Setting<Boolean> = Setting.boolSetting(
+            "index.opendistro.index_state_management.rollover_skip",
+            false,
+            Setting.Property.IndexScope,
+            Setting.Property.Dynamic,
+            Setting.Property.Deprecated
+        )
+
+        val AUTO_MANAGE: Setting<Boolean> = Setting.boolSetting(
+            "index.opendistro.index_state_management.auto_manage",
+            true,
+            Setting.Property.IndexScope,
+            Setting.Property.Dynamic
         )
 
         val JOB_INTERVAL: Setting<Int> = Setting.intSetting(
@@ -177,6 +195,14 @@ class LegacyOpenDistroManagedIndexSettings {
             "opendistro.index_state_management.snapshot.deny_list",
             SNAPSHOT_DENY_LIST_NONE,
             Function.identity(),
+            Setting.Property.NodeScope,
+            Setting.Property.Dynamic,
+            Setting.Property.Deprecated
+        )
+
+        val RESTRICTED_INDEX_PATTERN = Setting.simpleString(
+            "opendistro.index_state_management.restricted_index_pattern",
+            ManagedIndexSettings.DEFAULT_RESTRICTED_PATTERN,
             Setting.Property.NodeScope,
             Setting.Property.Dynamic,
             Setting.Property.Deprecated

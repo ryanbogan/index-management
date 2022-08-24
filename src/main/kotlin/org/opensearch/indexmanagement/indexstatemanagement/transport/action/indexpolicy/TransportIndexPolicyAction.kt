@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.transport.action.indexpolicy
@@ -29,6 +8,7 @@ package org.opensearch.indexmanagement.indexstatemanagement.transport.action.ind
 import org.apache.logging.log4j.LogManager
 import org.opensearch.ExceptionsHelper
 import org.opensearch.OpenSearchStatusException
+import org.opensearch.ResourceAlreadyExistsException
 import org.opensearch.action.ActionListener
 import org.opensearch.action.DocWriteRequest
 import org.opensearch.action.index.IndexRequest
@@ -39,17 +19,21 @@ import org.opensearch.action.support.ActionFilters
 import org.opensearch.action.support.HandledTransportAction
 import org.opensearch.action.support.master.AcknowledgedResponse
 import org.opensearch.client.node.NodeClient
+import org.opensearch.cluster.routing.allocation.AwarenessReplicaBalance
 import org.opensearch.cluster.service.ClusterService
+import org.opensearch.common.ValidationException
 import org.opensearch.common.inject.Inject
 import org.opensearch.common.settings.Settings
 import org.opensearch.common.xcontent.NamedXContentRegistry
 import org.opensearch.common.xcontent.XContentFactory
+import org.opensearch.commons.ConfigConstants
 import org.opensearch.commons.authuser.User
 import org.opensearch.index.query.QueryBuilders
 import org.opensearch.index.seqno.SequenceNumbers
 import org.opensearch.indexmanagement.IndexManagementIndices
 import org.opensearch.indexmanagement.IndexManagementPlugin
 import org.opensearch.indexmanagement.indexstatemanagement.ManagedIndexCoordinator.Companion.MAX_HITS
+import org.opensearch.indexmanagement.indexstatemanagement.action.ReplicaCountAction
 import org.opensearch.indexmanagement.indexstatemanagement.findConflictingPolicyTemplates
 import org.opensearch.indexmanagement.indexstatemanagement.findSelfConflictingTemplates
 import org.opensearch.indexmanagement.indexstatemanagement.model.ISMTemplate
@@ -70,6 +54,7 @@ import org.opensearch.transport.TransportService
 
 private val log = LogManager.getLogger(TransportIndexPolicyAction::class.java)
 
+@Suppress("LongParameterList")
 class TransportIndexPolicyAction @Inject constructor(
     val client: NodeClient,
     transportService: TransportService,
@@ -77,12 +62,14 @@ class TransportIndexPolicyAction @Inject constructor(
     val ismIndices: IndexManagementIndices,
     val clusterService: ClusterService,
     val settings: Settings,
-    val xContentRegistry: NamedXContentRegistry
+    val xContentRegistry: NamedXContentRegistry,
+    var awarenessReplicaBalance: AwarenessReplicaBalance,
 ) : HandledTransportAction<IndexPolicyRequest, IndexPolicyResponse>(
     IndexPolicyAction.NAME, transportService, actionFilters, ::IndexPolicyRequest
 ) {
 
-    @Volatile private var filterByEnabled = IndexManagementSettings.FILTER_BY_BACKEND_ROLES.get(settings)
+    @Volatile
+    private var filterByEnabled = IndexManagementSettings.FILTER_BY_BACKEND_ROLES.get(settings)
 
     init {
         clusterService.clusterSettings.addSettingsUpdateConsumer(IndexManagementSettings.FILTER_BY_BACKEND_ROLES) {
@@ -101,6 +88,12 @@ class TransportIndexPolicyAction @Inject constructor(
         private val user: User? = buildUser(client.threadPool().threadContext)
     ) {
         fun start() {
+            validate()
+            log.debug(
+                "User and roles string from thread context: ${client.threadPool().threadContext.getTransient<String>(
+                    ConfigConstants.OPENSEARCH_SECURITY_USER_INFO_THREAD_CONTEXT
+                )}"
+            )
             client.threadPool().threadContext.stashContext().use {
                 if (!validateUserConfiguration(user, filterByEnabled, actionListener)) {
                     return
@@ -111,9 +104,29 @@ class TransportIndexPolicyAction @Inject constructor(
                     }
 
                     override fun onFailure(t: Exception) {
-                        actionListener.onFailure(ExceptionsHelper.unwrapCause(t) as Exception)
+                        if (t is ResourceAlreadyExistsException) {
+                            actionListener.onFailure(OpenSearchStatusException(t.localizedMessage, RestStatus.CONFLICT))
+                        } else {
+                            actionListener.onFailure(ExceptionsHelper.unwrapCause(t) as Exception)
+                        }
                     }
                 })
+            }
+        }
+
+        @Suppress("ComplexMethod", "LongMethod", "NestedBlockDepth")
+        private fun validate() {
+            request.policy.states.forEach { state ->
+                state.actions.forEach { action ->
+                    if (action is ReplicaCountAction) {
+                        val error = awarenessReplicaBalance.validate(action.numOfReplicas)
+                        if (error.isPresent) {
+                            val ex = ValidationException()
+                            ex.addValidationError(error.get())
+                            actionListener.onFailure(ex)
+                        }
+                    }
+                }
             }
         }
 
@@ -148,9 +161,10 @@ class TransportIndexPolicyAction @Inject constructor(
             // check self overlapping
             val selfOverlap = ismTemplateList.findSelfConflictingTemplates()
             if (selfOverlap != null) {
-                val errorMessage = "New policy ${request.policyID} has an ISM template with index pattern ${selfOverlap.first} " +
-                    "matching this policy's other ISM templates with index patterns ${selfOverlap.second}," +
-                    " please use different priority"
+                val errorMessage =
+                    "New policy ${request.policyID} has an ISM template with index pattern ${selfOverlap.first} " +
+                        "matching this policy's other ISM templates with index patterns ${selfOverlap.second}," +
+                        " please use different priority"
                 actionListener.onFailure(IndexManagementException.wrap(IllegalArgumentException(errorMessage)))
                 return
             }
@@ -223,7 +237,12 @@ class TransportIndexPolicyAction @Inject constructor(
                     override fun onResponse(response: IndexResponse) {
                         val failureReasons = checkShardsFailure(response)
                         if (failureReasons != null) {
-                            actionListener.onFailure(OpenSearchStatusException(failureReasons.toString(), response.status()))
+                            actionListener.onFailure(
+                                OpenSearchStatusException(
+                                    failureReasons.toString(),
+                                    response.status()
+                                )
+                            )
                             return
                         }
                         actionListener.onResponse(
@@ -250,8 +269,7 @@ class TransportIndexPolicyAction @Inject constructor(
         private fun checkShardsFailure(response: IndexResponse): String? {
             val failureReasons = StringBuilder()
             if (response.shardInfo.failed > 0) {
-                response.shardInfo.failures.forEach {
-                    entry ->
+                response.shardInfo.failures.forEach { entry ->
                     failureReasons.append(entry.reason())
                 }
                 return failureReasons.toString()

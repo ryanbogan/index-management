@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.rollup.resthandler
@@ -89,7 +68,7 @@ class RestExplainRollupActionIT : RollupRestTestCase() {
     @Throws(Exception::class)
     fun `test explain rollup for nonexistent id`() {
         // Creating a rollup so the config index exists
-        createRollup(rollup = randomRollup(), rollupId = "doesnt_exist_some_other_id")
+        createRollup(rollup = randomRollup(), rollupId = "doesnt_exist_some_other_rollup_id")
         val response = client().makeRequest("GET", "$ROLLUP_JOBS_BASE_URI/doesnt_exist/_explain")
         assertNull("Nonexistent rollup didn't return null", response.asMap()["doesnt_exist"])
     }
@@ -97,30 +76,30 @@ class RestExplainRollupActionIT : RollupRestTestCase() {
     @Throws(Exception::class)
     fun `test explain rollup for wildcard id`() {
         // Creating a rollup so the config index exists
-        createRollup(rollup = randomRollup(), rollupId = "wildcard_some_id")
-        createRollup(rollup = randomRollup(), rollupId = "wildcard_some_other_id")
+        createRollup(rollup = randomRollup(), rollupId = "wildcard_some_rollup_id")
+        createRollup(rollup = randomRollup(), rollupId = "wildcard_some_other_rollup_id")
         val response = client().makeRequest("GET", "$ROLLUP_JOBS_BASE_URI/wildcard_some*/_explain")
         // We don't expect there to always be metadata as we are creating random rollups and the job isn't running
         // but we do expect the wildcard some* to expand to the two jobs created above and have non-null values (meaning they exist)
         val map = response.asMap()
-        assertNotNull("Non null wildcard_some_id value wasn't in the response", map["wildcard_some_id"])
-        assertNotNull("Non null wildcard_some_other_id value wasn't in the response", map["wildcard_some_other_id"])
+        assertNotNull("Non null wildcard_some_rollup_id value wasn't in the response", map["wildcard_some_rollup_id"])
+        assertNotNull("Non null wildcard_some_other_rollup_id value wasn't in the response", map["wildcard_some_other_rollup_id"])
     }
 
     @Throws(Exception::class)
     fun `test explain rollup for job that hasnt started`() {
-        createRollup(rollup = randomRollup().copy(metadataID = null), rollupId = "not_started_some_id")
-        val response = client().makeRequest("GET", "$ROLLUP_JOBS_BASE_URI/not_started_some_id/_explain")
-        val expectedMap = mapOf("not_started_some_id" to mapOf("metadata_id" to null, "rollup_metadata" to null))
+        createRollup(rollup = randomRollup().copy(metadataID = null), rollupId = "not_started_some_rollup_id")
+        val response = client().makeRequest("GET", "$ROLLUP_JOBS_BASE_URI/not_started_some_rollup_id/_explain")
+        val expectedMap = mapOf("not_started_some_rollup_id" to mapOf("metadata_id" to null, "rollup_metadata" to null))
         assertEquals("The explain response did not match expected", expectedMap, response.asMap())
     }
 
     @Throws(Exception::class)
     fun `test explain rollup for metadata_id but no metadata`() {
         // This is to test the case of a rollup existing with a metadataID but there being no metadata document
-        createRollup(rollup = randomRollup().copy(metadataID = "some_metadata_id"), rollupId = "no_meta_some_id")
-        val response = client().makeRequest("GET", "$ROLLUP_JOBS_BASE_URI/no_meta_some_id/_explain")
-        val expectedMap = mapOf("no_meta_some_id" to mapOf("metadata_id" to "some_metadata_id", "rollup_metadata" to null))
+        createRollup(rollup = randomRollup().copy(metadataID = "some_metadata_id"), rollupId = "no_meta_some_rollup_id")
+        val response = client().makeRequest("GET", "$ROLLUP_JOBS_BASE_URI/no_meta_some_rollup_id/_explain")
+        val expectedMap = mapOf("no_meta_some_rollup_id" to mapOf("metadata_id" to "some_metadata_id", "rollup_metadata" to null))
         assertEquals("The explain response did not match expected", expectedMap, response.asMap())
     }
 

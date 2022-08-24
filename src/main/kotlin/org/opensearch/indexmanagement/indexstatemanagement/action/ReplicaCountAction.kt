@@ -1,50 +1,49 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.action
 
-import org.opensearch.client.Client
-import org.opensearch.cluster.service.ClusterService
-import org.opensearch.indexmanagement.indexstatemanagement.model.ManagedIndexMetaData
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ActionConfig.ActionType
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ReplicaCountActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.step.Step
-import org.opensearch.indexmanagement.indexstatemanagement.step.replicacount.AttemptSetReplicaCountStep
+import org.opensearch.common.io.stream.StreamOutput
+import org.opensearch.common.xcontent.ToXContent
+import org.opensearch.common.xcontent.XContentBuilder
+import org.opensearch.indexmanagement.indexstatemanagement.step.replicacount.AttemptReplicaCountStep
+import org.opensearch.indexmanagement.spi.indexstatemanagement.Action
+import org.opensearch.indexmanagement.spi.indexstatemanagement.Step
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.StepContext
 
 class ReplicaCountAction(
-    clusterService: ClusterService,
-    client: Client,
-    managedIndexMetaData: ManagedIndexMetaData,
-    config: ReplicaCountActionConfig
-) : Action(ActionType.REPLICA_COUNT, config, managedIndexMetaData) {
+    val numOfReplicas: Int,
+    index: Int
+) : Action(name, index) {
 
-    private val attemptSetReplicaCountStep = AttemptSetReplicaCountStep(clusterService, client, config, managedIndexMetaData)
-    private val steps = listOf(attemptSetReplicaCountStep)
+    init {
+        require(numOfReplicas >= 0) { "ReplicaCountAction number_of_replicas value must be a non-negative number" }
+    }
+
+    private val attemptReplicaCountStep = AttemptReplicaCountStep(this)
+    private val steps = listOf(attemptReplicaCountStep)
+
+    override fun getStepToExecute(context: StepContext): Step {
+        return attemptReplicaCountStep
+    }
 
     override fun getSteps(): List<Step> = steps
 
-    override fun getStepToExecute(): Step = attemptSetReplicaCountStep
+    override fun populateAction(builder: XContentBuilder, params: ToXContent.Params) {
+        builder.startObject(type)
+        builder.field(NUMBER_OF_REPLICAS_FIELD, numOfReplicas)
+        builder.endObject()
+    }
+
+    override fun populateAction(out: StreamOutput) {
+        out.writeInt(numOfReplicas)
+        out.writeInt(actionIndex)
+    }
+
+    companion object {
+        const val NUMBER_OF_REPLICAS_FIELD = "number_of_replicas"
+        const val name = "replica_count"
+    }
 }

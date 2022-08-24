@@ -1,23 +1,17 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
  */
 
 package org.opensearch.indexmanagement.rollup.model
 
+import org.apache.commons.codec.digest.DigestUtils
 import org.opensearch.index.seqno.SequenceNumbers
 import org.opensearch.indexmanagement.rollup.randomDateHistogram
 import org.opensearch.indexmanagement.rollup.randomISMRollup
 import org.opensearch.indexmanagement.rollup.randomTerms
 import org.opensearch.indexmanagement.util.IndexUtils
 import org.opensearch.jobscheduler.spi.schedule.IntervalSchedule
-import org.opensearch.notification.repackage.org.apache.commons.codec.digest.DigestUtils
 import org.opensearch.test.OpenSearchTestCase
 import java.time.temporal.ChronoUnit
 import kotlin.test.assertFailsWith

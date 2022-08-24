@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.transport.action.updateindexmetadata
@@ -48,7 +27,8 @@ import org.opensearch.common.io.stream.StreamInput
 import org.opensearch.common.io.stream.Writeable
 import org.opensearch.index.Index
 import org.opensearch.indexmanagement.IndexManagementPlugin
-import org.opensearch.indexmanagement.indexstatemanagement.model.ManagedIndexMetaData
+import org.opensearch.indexmanagement.indexstatemanagement.IndexMetadataProvider
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ManagedIndexMetaData
 import org.opensearch.threadpool.ThreadPool
 import org.opensearch.transport.TransportService
 
@@ -57,6 +37,7 @@ class TransportUpdateManagedIndexMetaDataAction @Inject constructor(
     clusterService: ClusterService,
     transportService: TransportService,
     actionFilters: ActionFilters,
+    val indexMetadataProvider: IndexMetadataProvider,
     indexNameExpressionResolver: IndexNameExpressionResolver
 ) : TransportMasterNodeAction<UpdateManagedIndexMetaDataRequest, AcknowledgedResponse>(
     UpdateManagedIndexMetaDataAction.INSTANCE.name(),
@@ -74,11 +55,25 @@ class TransportUpdateManagedIndexMetaDataAction @Inject constructor(
     override fun checkBlock(request: UpdateManagedIndexMetaDataRequest, state: ClusterState): ClusterBlockException? {
         // https://github.com/elastic/elasticsearch/commit/ae14b4e6f96b554ca8f4aaf4039b468f52df0123
         // This commit will help us to give each individual index name and the error that is cause it. For now it will be a generic error message.
-        val indicesToAddTo = request.indicesToAddManagedIndexMetaDataTo.map { it.first.name }.toTypedArray()
-        val indicesToRemoveFrom = request.indicesToRemoveManagedIndexMetaDataFrom.map { it.name }.toTypedArray()
-        val indices = indicesToAddTo + indicesToRemoveFrom
+        val indicesToAddTo = request.indicesToAddManagedIndexMetaDataTo.map { it.first }.toTypedArray()
+        val indicesToRemoveFrom = request.indicesToRemoveManagedIndexMetaDataFrom.map { it }.toTypedArray()
+        val indices = checkExtensionsOverrideBlock(indicesToAddTo + indicesToRemoveFrom, state)
 
         return state.blocks.indicesBlockedException(ClusterBlockLevel.METADATA_WRITE, indices)
+    }
+
+    /*
+     * Index Management extensions may provide an index setting, which, if set to true, overrides the cluster metadata write block
+     */
+    private fun checkExtensionsOverrideBlock(indices: Array<Index>, state: ClusterState): Array<String> {
+        val indexBlockOverrideSettings = indexMetadataProvider.getIndexMetadataWriteOverrideSettings()
+        val indicesToBlock = indices.toMutableList()
+        indexBlockOverrideSettings.forEach { indexBlockOverrideSetting ->
+            indicesToBlock.removeIf { state.metadata.getIndexSafe(it).settings.getAsBoolean(indexBlockOverrideSetting, false) }
+        }
+        return indicesToBlock
+            .map { it.name }
+            .toTypedArray()
     }
 
     override fun masterOperation(

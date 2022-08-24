@@ -1,60 +1,43 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement
 
+import org.opensearch.action.admin.indices.alias.Alias
 import org.opensearch.common.unit.ByteSizeValue
 import org.opensearch.common.unit.TimeValue
 import org.opensearch.common.xcontent.ToXContent
 import org.opensearch.common.xcontent.XContentFactory
+import org.opensearch.index.RandomCreateIndexGenerator.randomAlias
 import org.opensearch.index.seqno.SequenceNumbers
+import org.opensearch.indexmanagement.indexstatemanagement.action.AllocationAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.CloseAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.DeleteAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.ForceMergeAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.IndexPriorityAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.NotificationAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.OpenAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.ReadOnlyAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.ReadWriteAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.ReplicaCountAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.RolloverAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.RollupAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.ShrinkAction
+import org.opensearch.indexmanagement.indexstatemanagement.action.SnapshotAction
 import org.opensearch.indexmanagement.indexstatemanagement.model.ChangePolicy
 import org.opensearch.indexmanagement.indexstatemanagement.model.Conditions
 import org.opensearch.indexmanagement.indexstatemanagement.model.ErrorNotification
 import org.opensearch.indexmanagement.indexstatemanagement.model.ISMTemplate
 import org.opensearch.indexmanagement.indexstatemanagement.model.ManagedIndexConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.ManagedIndexMetaData
 import org.opensearch.indexmanagement.indexstatemanagement.model.Policy
 import org.opensearch.indexmanagement.indexstatemanagement.model.State
 import org.opensearch.indexmanagement.indexstatemanagement.model.StateFilter
 import org.opensearch.indexmanagement.indexstatemanagement.model.Transition
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.AllocationActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.DeleteActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ForceMergeActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.IndexPriorityActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.NotificationActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ReadOnlyActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ReadWriteActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ReplicaCountActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.RolloverActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.RollupActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.SnapshotActionConfig
 import org.opensearch.indexmanagement.indexstatemanagement.model.coordinator.ClusterStateManagedIndexConfig
 import org.opensearch.indexmanagement.indexstatemanagement.model.coordinator.SweptManagedIndexConfig
+import org.opensearch.indexmanagement.common.model.notification.Channel
 import org.opensearch.indexmanagement.indexstatemanagement.model.destination.Chime
 import org.opensearch.indexmanagement.indexstatemanagement.model.destination.CustomWebhook
 import org.opensearch.indexmanagement.indexstatemanagement.model.destination.Destination
@@ -62,15 +45,23 @@ import org.opensearch.indexmanagement.indexstatemanagement.model.destination.Des
 import org.opensearch.indexmanagement.indexstatemanagement.model.destination.Slack
 import org.opensearch.indexmanagement.opensearchapi.string
 import org.opensearch.indexmanagement.rollup.randomISMRollup
+import org.opensearch.indexmanagement.spi.indexstatemanagement.Action
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ManagedIndexMetaData
 import org.opensearch.jobscheduler.spi.schedule.CronSchedule
 import org.opensearch.jobscheduler.spi.schedule.IntervalSchedule
 import org.opensearch.jobscheduler.spi.schedule.Schedule
 import org.opensearch.script.Script
 import org.opensearch.script.ScriptType
+import org.opensearch.test.OpenSearchTestCase.randomAlphaOfLength
+import org.opensearch.test.OpenSearchTestCase.randomBoolean
+import org.opensearch.test.OpenSearchTestCase.randomDoubleBetween
+import org.opensearch.test.OpenSearchTestCase.randomInt
+import org.opensearch.test.OpenSearchTestCase.randomList
 import org.opensearch.test.rest.OpenSearchRestTestCase
 import java.time.Instant
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
+import kotlin.math.abs
 
 fun randomPolicy(
     id: String = OpenSearchRestTestCase.randomAlphaOfLength(10),
@@ -89,7 +80,7 @@ fun randomPolicy(
 
 fun randomState(
     name: String = OpenSearchRestTestCase.randomAlphaOfLength(10),
-    actions: List<ActionConfig> = listOf(),
+    actions: List<Action> = listOf(),
     transitions: List<Transition> = listOf()
 ): State {
     return State(name = name, actions = actions, transitions = transitions)
@@ -110,7 +101,7 @@ fun randomTransition(
  */
 fun randomConditions(
     condition: Pair<String, Any>? =
-        OpenSearchRestTestCase.randomFrom(listOf(randomIndexAge(), randomDocCount(), randomSize(), null))
+        OpenSearchRestTestCase.randomFrom(listOf(randomIndexAge(), randomDocCount(), randomSize(), randomRolloverAge(), null))
 ): Conditions? {
 
     if (condition == null) return null
@@ -123,6 +114,7 @@ fun randomConditions(
         Conditions.MIN_DOC_COUNT_FIELD -> Conditions(docCount = value as Long)
         Conditions.MIN_SIZE_FIELD -> Conditions(size = value as ByteSizeValue)
 //        Conditions.CRON_FIELD -> Conditions(cron = value as CronSchedule) // TODO: Uncomment after issues are fixed
+        Conditions.MIN_ROLLOVER_AGE_FIELD -> Conditions(rolloverAge = value as TimeValue)
         else -> throw IllegalArgumentException("Invalid field: [$type] given for random Conditions.")
     }
 }
@@ -130,59 +122,88 @@ fun randomConditions(
 fun nonNullRandomConditions(): Conditions =
     randomConditions(OpenSearchRestTestCase.randomFrom(listOf(randomIndexAge(), randomDocCount(), randomSize())))!!
 
-fun randomDeleteActionConfig(): DeleteActionConfig {
-    return DeleteActionConfig(index = 0)
+fun randomDeleteActionConfig(): DeleteAction {
+    return DeleteAction(index = 0)
 }
 
 fun randomRolloverActionConfig(
     minSize: ByteSizeValue = randomByteSizeValue(),
     minDocs: Long = OpenSearchRestTestCase.randomLongBetween(1, 1000),
-    minAge: TimeValue = randomTimeValueObject()
-): RolloverActionConfig {
-    return RolloverActionConfig(
+    minAge: TimeValue = randomTimeValueObject(),
+    minPrimaryShardSize: ByteSizeValue = randomByteSizeValue()
+): RolloverAction {
+    return RolloverAction(
         minSize = minSize,
         minDocs = minDocs,
         minAge = minAge,
+        minPrimaryShardSize = minPrimaryShardSize,
         index = 0
     )
 }
 
-fun randomReadOnlyActionConfig(): ReadOnlyActionConfig {
-    return ReadOnlyActionConfig(index = 0)
+@Suppress("ReturnCount")
+fun randomShrinkAction(
+    numNewShards: Int? = null,
+    maxShardSize: ByteSizeValue? = null,
+    percentageOfSourceShards: Double? = null,
+    targetIndexTemplate: Script? = if (randomBoolean()) randomTemplateScript(randomAlphaOfLength(10)) else null,
+    aliases: List<Alias>? = if (randomBoolean()) randomList(10) { randomAlias() } else null,
+    forceUnsafe: Boolean? = if (randomBoolean()) randomBoolean() else null
+): ShrinkAction {
+    if (numNewShards == null && maxShardSize == null && percentageOfSourceShards == null) {
+        when (randomInt(2)) {
+            0 -> return ShrinkAction(abs(randomInt()) + 1, null, null, targetIndexTemplate, aliases, forceUnsafe, 0)
+            1 -> return ShrinkAction(null, randomByteSizeValue(), null, targetIndexTemplate, aliases, forceUnsafe, 0)
+            2 -> return ShrinkAction(null, null, randomDoubleBetween(0.0, 1.0, true), targetIndexTemplate, aliases, forceUnsafe, 0)
+        }
+    }
+    return ShrinkAction(numNewShards, maxShardSize, percentageOfSourceShards, targetIndexTemplate, aliases, forceUnsafe, 0)
 }
 
-fun randomReadWriteActionConfig(): ReadWriteActionConfig {
-    return ReadWriteActionConfig(index = 0)
+fun randomReadOnlyActionConfig(): ReadOnlyAction {
+    return ReadOnlyAction(index = 0)
 }
 
-fun randomReplicaCountActionConfig(numOfReplicas: Int = OpenSearchRestTestCase.randomIntBetween(0, 200)): ReplicaCountActionConfig {
-    return ReplicaCountActionConfig(index = 0, numOfReplicas = numOfReplicas)
+fun randomReadWriteActionConfig(): ReadWriteAction {
+    return ReadWriteAction(index = 0)
 }
 
-fun randomIndexPriorityActionConfig(indexPriority: Int = OpenSearchRestTestCase.randomIntBetween(0, 100)): IndexPriorityActionConfig {
-    return IndexPriorityActionConfig(index = 0, indexPriority = indexPriority)
+fun randomReplicaCountActionConfig(numOfReplicas: Int = OpenSearchRestTestCase.randomIntBetween(0, 200)): ReplicaCountAction {
+    return ReplicaCountAction(index = 0, numOfReplicas = numOfReplicas)
+}
+
+fun randomIndexPriorityActionConfig(indexPriority: Int = OpenSearchRestTestCase.randomIntBetween(0, 100)): IndexPriorityAction {
+    return IndexPriorityAction(index = 0, indexPriority = indexPriority)
 }
 
 fun randomForceMergeActionConfig(
     maxNumSegments: Int = OpenSearchRestTestCase.randomIntBetween(1, 50)
-): ForceMergeActionConfig {
-    return ForceMergeActionConfig(maxNumSegments = maxNumSegments, index = 0)
+): ForceMergeAction {
+    return ForceMergeAction(maxNumSegments = maxNumSegments, index = 0)
 }
 
 fun randomNotificationActionConfig(
     destination: Destination = randomDestination(),
     messageTemplate: Script = randomTemplateScript("random message"),
     index: Int = 0
-): NotificationActionConfig {
-    return NotificationActionConfig(destination, messageTemplate, index)
+): NotificationAction {
+    return NotificationAction(destination, null, messageTemplate, index)
 }
 
-fun randomAllocationActionConfig(require: Map<String, String> = emptyMap(), exclude: Map<String, String> = emptyMap(), include: Map<String, String> = emptyMap()): AllocationActionConfig {
-    return AllocationActionConfig(require, include, exclude, index = 0)
+fun randomAllocationActionConfig(require: Map<String, String> = emptyMap(), exclude: Map<String, String> = emptyMap(), include: Map<String, String> = emptyMap()): AllocationAction {
+    return AllocationAction(require, include, exclude, index = 0)
 }
 
-fun randomRollupActionConfig(): RollupActionConfig {
-    return RollupActionConfig(ismRollup = randomISMRollup(), index = 0)
+fun randomRollupActionConfig(): RollupAction {
+    return RollupAction(ismRollup = randomISMRollup(), index = 0)
+}
+
+fun randomCloseActionConfig(): CloseAction {
+    return CloseAction(index = 0)
+}
+
+fun randomOpenActionConfig(): OpenAction {
+    return OpenAction(index = 0)
 }
 
 fun randomDestination(type: DestinationType = randomDestinationType()): Destination {
@@ -222,12 +243,14 @@ fun randomCustomWebhook(): CustomWebhook {
 }
 
 fun randomTemplateScript(
-    source: String,
-    params: Map<String, String> = emptyMap()
-): Script = Script(ScriptType.INLINE, Script.DEFAULT_TEMPLATE_LANG, source, params)
+    source: String = OpenSearchRestTestCase.randomAlphaOfLength(10),
+    params: Map<String, String> = emptyMap(),
+    scriptType: ScriptType = ScriptType.INLINE,
+    lang: String = Script.DEFAULT_TEMPLATE_LANG
+): Script = Script(scriptType, lang, source, params)
 
-fun randomSnapshotActionConfig(repository: String = "repo", snapshot: String = "sp"): SnapshotActionConfig {
-    return SnapshotActionConfig(repository, snapshot, index = 0)
+fun randomSnapshotActionConfig(repository: String = "repo", snapshot: String = "sp"): SnapshotAction {
+    return SnapshotAction(repository, snapshot, index = 0)
 }
 
 /**
@@ -241,6 +264,8 @@ fun randomSize(size: ByteSizeValue = randomByteSizeValue()) = Conditions.MIN_SIZ
 
 fun randomCronSchedule(cron: CronSchedule = CronSchedule("0 * * * *", ZoneId.of("UTC"))) =
     Conditions.CRON_FIELD to cron
+
+fun randomRolloverAge(rolloverAge: TimeValue = randomTimeValueObject()) = Conditions.MIN_ROLLOVER_AGE_FIELD to rolloverAge
 
 fun randomTimeValueObject(): TimeValue = TimeValue.parseTimeValue(OpenSearchRestTestCase.randomPositiveTimeValue(), "")
 
@@ -263,6 +288,7 @@ fun randomChangePolicy(
 }
 
 // will only return null since we dont want to send actual notifications during integ tests
+@Suppress("FunctionOnlyReturningConstant")
 fun randomErrorNotification(): ErrorNotification? = null
 
 fun randomManagedIndexConfig(
@@ -343,6 +369,10 @@ fun randomISMTemplate(
     )
 }
 
+fun randomChannel(id: String = OpenSearchRestTestCase.randomAlphaOfLength(10)): Channel {
+    return Channel(id = id)
+}
+
 fun Policy.toJsonString(): String {
     val builder = XContentFactory.jsonBuilder()
     return this.toXContent(builder).string()
@@ -363,47 +393,52 @@ fun Conditions.toJsonString(): String {
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
 
-fun DeleteActionConfig.toJsonString(): String {
+fun DeleteAction.toJsonString(): String {
     val builder = XContentFactory.jsonBuilder()
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
 
-fun RolloverActionConfig.toJsonString(): String {
+fun RolloverAction.toJsonString(): String {
     val builder = XContentFactory.jsonBuilder()
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
 
-fun ReadOnlyActionConfig.toJsonString(): String {
+fun ReadOnlyAction.toJsonString(): String {
     val builder = XContentFactory.jsonBuilder()
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
 
-fun ReadWriteActionConfig.toJsonString(): String {
+fun ReadWriteAction.toJsonString(): String {
     val builder = XContentFactory.jsonBuilder()
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
 
-fun ReplicaCountActionConfig.toJsonString(): String {
+fun ShrinkAction.toJsonString(): String {
     val builder = XContentFactory.jsonBuilder()
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
 
-fun IndexPriorityActionConfig.toJsonString(): String {
+fun ReplicaCountAction.toJsonString(): String {
     val builder = XContentFactory.jsonBuilder()
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
 
-fun ForceMergeActionConfig.toJsonString(): String {
+fun IndexPriorityAction.toJsonString(): String {
     val builder = XContentFactory.jsonBuilder()
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
 
-fun NotificationActionConfig.toJsonString(): String {
+fun ForceMergeAction.toJsonString(): String {
     val builder = XContentFactory.jsonBuilder()
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
 
-fun AllocationActionConfig.toJsonString(): String {
+fun NotificationAction.toJsonString(): String {
+    val builder = XContentFactory.jsonBuilder()
+    return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
+}
+
+fun AllocationAction.toJsonString(): String {
     val builder = XContentFactory.jsonBuilder()
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
@@ -423,12 +458,22 @@ fun ManagedIndexMetaData.toJsonString(): String {
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).endObject().string()
 }
 
-fun SnapshotActionConfig.toJsonString(): String {
+fun SnapshotAction.toJsonString(): String {
     val builder = XContentFactory.jsonBuilder()
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
 
-fun RollupActionConfig.toJsonString(): String {
+fun RollupAction.toJsonString(): String {
+    val builder = XContentFactory.jsonBuilder()
+    return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
+}
+
+fun CloseAction.toJsonString(): String {
+    val builder = XContentFactory.jsonBuilder()
+    return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
+}
+
+fun OpenAction.toJsonString(): String {
     val builder = XContentFactory.jsonBuilder()
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
@@ -438,6 +483,12 @@ fun ISMTemplate.toJsonString(): String {
     return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
 }
 
+fun Channel.toJsonString(): String {
+    val builder = XContentFactory.jsonBuilder()
+    return this.toXContent(builder, ToXContent.EMPTY_PARAMS).string()
+}
+
+@Suppress("RethrowCaughtException")
 fun <T> wait(
     timeout: Instant = Instant.ofEpochSecond(10),
     block: () -> T

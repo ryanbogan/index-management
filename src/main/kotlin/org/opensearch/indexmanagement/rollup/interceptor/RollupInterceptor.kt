@@ -1,32 +1,10 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.rollup.interceptor
 
-import org.apache.logging.log4j.LogManager
 import org.opensearch.cluster.metadata.IndexNameExpressionResolver
 import org.opensearch.cluster.service.ClusterService
 import org.opensearch.common.settings.Settings
@@ -74,8 +52,6 @@ class RollupInterceptor(
     val indexNameExpressionResolver: IndexNameExpressionResolver
 ) : TransportInterceptor {
 
-    private val logger = LogManager.getLogger(javaClass)
-
     @Volatile private var searchEnabled = RollupSettings.ROLLUP_SEARCH_ENABLED.get(settings)
     @Volatile private var searchAllJobs = RollupSettings.ROLLUP_SEARCH_ALL_JOBS.get(settings)
 
@@ -109,36 +85,39 @@ class RollupInterceptor(
                         val concreteIndices = indexNameExpressionResolver
                             .concreteIndexNames(clusterService.state(), request.indicesOptions(), *indices)
 
-                        if (concreteIndices.size > 1) {
-                            logger.warn(
-                                "There can be only one index in search request if its a rollup search - requested to search [${concreteIndices
-                                    .size}] indices including rollup index [$index]"
-                            )
-                            throw IllegalArgumentException("Searching rollup index with other indices is not supported currently")
-                        }
-
-                        val rollupJobs = clusterService.state().metadata.index(index).getRollupJobs()
-                            ?: throw IllegalArgumentException("Could not find any valid rollup job on the index")
-
                         val queryFieldMappings = getQueryMetadata(request.source().query())
                         val aggregationFieldMappings = getAggregationMetadata(request.source().aggregations()?.aggregatorFactories)
                         val fieldMappings = queryFieldMappings + aggregationFieldMappings
 
-                        val (matchingRollupJobs, issues) = findMatchingRollupJobs(fieldMappings, rollupJobs)
-
-                        if (matchingRollupJobs.isEmpty()) {
-                            throw IllegalArgumentException("Could not find a rollup job that can answer this query because $issues")
-                        }
+                        val allMatchingRollupJobs = validateIndicies(concreteIndices, fieldMappings)
 
                         // only rebuild if there is necessity to rebuild
                         if (fieldMappings.isNotEmpty()) {
-                            rewriteShardSearchForRollupJobs(request, matchingRollupJobs)
+                            rewriteShardSearchForRollupJobs(request, allMatchingRollupJobs)
                         }
                     }
                 }
                 actualHandler.messageReceived(request, channel, task)
             }
         }
+    }
+    /*
+    * Validate that all indices have rollup job which matches field mappings from request
+    * TODO return compiled list of issues here instead of just throwing exception
+    * */
+    private fun validateIndicies(concreteIndices: Array<String>, fieldMappings: Set<RollupFieldMapping>): Map<Rollup, Set<RollupFieldMapping>> {
+        var allMatchingRollupJobs: Map<Rollup, Set<RollupFieldMapping>> = mapOf()
+        for (concreteIndex in concreteIndices) {
+            val rollupJobs = clusterService.state().metadata.index(concreteIndex).getRollupJobs()
+                ?: throw IllegalArgumentException("Not all indices have rollup job")
+
+            val (matchingRollupJobs, issues) = findMatchingRollupJobs(fieldMappings, rollupJobs)
+            if (issues.isNotEmpty() || matchingRollupJobs.isEmpty()) {
+                throw IllegalArgumentException("Could not find a rollup job that can answer this query because $issues")
+            }
+            allMatchingRollupJobs += matchingRollupJobs
+        }
+        return allMatchingRollupJobs
     }
 
     @Suppress("ComplexMethod")
@@ -284,9 +263,11 @@ class RollupInterceptor(
         if (rollups.size == 1) {
             return rollups.first()
         }
+        // Make selection deterministic
+        val sortedRollups = rollups.sortedBy { it.id }
 
         // Picking the job with largest rollup window for now
-        return rollups.reduce { matched, new ->
+        return sortedRollups.reduce { matched, new ->
             if (getEstimateRollupInterval(matched) > getEstimateRollupInterval(new)) matched
             else new
         }

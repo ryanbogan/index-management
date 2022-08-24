@@ -1,35 +1,27 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.transport.action.getpolicy
 
 import org.opensearch.common.io.stream.BytesStreamOutput
 import org.opensearch.common.io.stream.StreamInput
+import org.opensearch.common.xcontent.ToXContent
+import org.opensearch.common.xcontent.XContentFactory
+import org.opensearch.common.xcontent.XContentHelper
+import org.opensearch.common.xcontent.json.JsonXContent
+import org.opensearch.indexmanagement.indexstatemanagement.ISMActionsParser
+import org.opensearch.indexmanagement.indexstatemanagement.extension.SampleCustomActionParser
+import org.opensearch.indexmanagement.indexstatemanagement.model.Policy
+import org.opensearch.indexmanagement.indexstatemanagement.model.State
+import org.opensearch.indexmanagement.indexstatemanagement.randomErrorNotification
 import org.opensearch.indexmanagement.indexstatemanagement.randomPolicy
+import org.opensearch.indexmanagement.opensearchapi.convertToMap
+import org.opensearch.indexmanagement.opensearchapi.string
 import org.opensearch.test.OpenSearchTestCase
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 class GetPoliciesResponseTests : OpenSearchTestCase() {
 
@@ -44,5 +36,36 @@ class GetPoliciesResponseTests : OpenSearchTestCase() {
         assertEquals(1, newRes.totalPolicies)
         assertEquals(1, newRes.policies.size)
         assertEquals(policy, newRes.policies[0])
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun `test get policies response custom action`() {
+        val customActionParser = SampleCustomActionParser()
+        customActionParser.customAction = true
+        val extensionName = "testExtension"
+        ISMActionsParser.instance.addParser(customActionParser, extensionName)
+        val policyID = "policyID"
+        val action = SampleCustomActionParser.SampleCustomAction(someInt = randomInt(), index = 0)
+        val states = listOf(State(name = "CustomState", actions = listOf(action), transitions = listOf()))
+        val policy = Policy(
+            id = policyID,
+            description = "description",
+            schemaVersion = 1L,
+            lastUpdatedTime = Instant.now().truncatedTo(ChronoUnit.MILLIS),
+            errorNotification = randomErrorNotification(),
+            defaultState = states[0].name,
+            states = states
+        )
+        val res = GetPoliciesResponse(listOf(policy), 1)
+
+        val responseString = res.toXContent(XContentFactory.jsonBuilder(), ToXContent.EMPTY_PARAMS).string()
+        val responseMap = XContentHelper.convertToMap(JsonXContent.jsonXContent, responseString, false)
+        assertEquals("Round tripping custom action doesn't work", res.convertToMap(), responseMap)
+        assertNotEquals("Get policies response should change the policy output", responseMap, policy.convertToMap())
+        val parsedPolicy = (responseMap["policies"] as ArrayList<Map<String, Any>>).first()["policy"] as Map<String, Any>
+        val parsedStates = parsedPolicy["states"] as ArrayList<Map<String, Any>>
+        val parsedActions = parsedStates.first()["actions"] as ArrayList<Map<String, Any>>
+        assertFalse("Get policies response should not contain the custom keyword", parsedActions.first().containsKey("custom"))
+        ISMActionsParser.instance.parsers.removeIf { it.getActionType() == SampleCustomActionParser.SampleCustomAction.name }
     }
 }

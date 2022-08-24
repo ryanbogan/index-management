@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.resthandler
@@ -33,6 +12,8 @@ import org.opensearch.indexmanagement.IndexManagementPlugin.Companion.ISM_BASE_U
 import org.opensearch.indexmanagement.IndexManagementPlugin.Companion.LEGACY_ISM_BASE_URI
 import org.opensearch.indexmanagement.indexstatemanagement.transport.action.addpolicy.AddPolicyAction
 import org.opensearch.indexmanagement.indexstatemanagement.transport.action.addpolicy.AddPolicyRequest
+import org.opensearch.indexmanagement.indexstatemanagement.util.DEFAULT_INDEX_TYPE
+import org.opensearch.indexmanagement.indexstatemanagement.util.TYPE_PARAM_KEY
 import org.opensearch.rest.BaseRestHandler
 import org.opensearch.rest.BaseRestHandler.RestChannelConsumer
 import org.opensearch.rest.RestHandler.ReplacedRoute
@@ -78,9 +59,11 @@ class RestAddPolicyAction : BaseRestHandler() {
             mapOf()
         }
 
+        val indexType = request.param(TYPE_PARAM_KEY, DEFAULT_INDEX_TYPE)
+
         val policyID = requireNotNull(body.getOrDefault("policy_id", null)) { "Missing policy_id" }
 
-        val addPolicyRequest = AddPolicyRequest(indices.toList(), policyID as String)
+        val addPolicyRequest = AddPolicyRequest(indices.toList(), policyID as String, indexType)
 
         return RestChannelConsumer { channel ->
             client.execute(AddPolicyAction.INSTANCE, addPolicyRequest, RestToXContentListener(channel))

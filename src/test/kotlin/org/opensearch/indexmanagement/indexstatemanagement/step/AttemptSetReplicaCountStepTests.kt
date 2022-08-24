@@ -1,63 +1,51 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.step
 
 import com.nhaarman.mockitokotlin2.any
-import com.nhaarman.mockitokotlin2.doAnswer
 import com.nhaarman.mockitokotlin2.doReturn
 import com.nhaarman.mockitokotlin2.mock
 import com.nhaarman.mockitokotlin2.whenever
 import kotlinx.coroutines.runBlocking
+import org.mockito.Mockito.doAnswer
 import org.opensearch.action.ActionListener
 import org.opensearch.action.support.master.AcknowledgedResponse
 import org.opensearch.client.AdminClient
 import org.opensearch.client.Client
 import org.opensearch.client.IndicesAdminClient
 import org.opensearch.cluster.service.ClusterService
-import org.opensearch.indexmanagement.indexstatemanagement.model.ManagedIndexMetaData
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ReplicaCountActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.step.replicacount.AttemptSetReplicaCountStep
+import org.opensearch.common.settings.Settings
+import org.opensearch.indexmanagement.indexstatemanagement.action.ReplicaCountAction
+import org.opensearch.indexmanagement.indexstatemanagement.step.replicacount.AttemptReplicaCountStep
+import org.opensearch.indexmanagement.spi.indexstatemanagement.Step
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ManagedIndexMetaData
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.StepContext
+import org.opensearch.jobscheduler.spi.utils.LockService
+import org.opensearch.script.ScriptService
 import org.opensearch.test.OpenSearchTestCase
 import org.opensearch.transport.RemoteTransportException
 
 class AttemptSetReplicaCountStepTests : OpenSearchTestCase() {
 
     private val clusterService: ClusterService = mock()
+    private val scriptService: ScriptService = mock()
+    private val settings: Settings = Settings.EMPTY
+    private val lockService: LockService = LockService(mock(), clusterService)
 
     fun `test replica step sets step status to failed when not acknowledged`() {
         val replicaCountResponse = AcknowledgedResponse(false)
         val client = getClient(getAdminClient(getIndicesAdminClient(replicaCountResponse, null)))
 
         runBlocking {
-            val replicaCountActionConfig = ReplicaCountActionConfig(2, 0)
-            val managedIndexMetaData = ManagedIndexMetaData("test", "indexUuid", "policy_id", null, null, null, null, null, null, null, null, null, null)
-            val replicaCountStep = AttemptSetReplicaCountStep(clusterService, client, replicaCountActionConfig, managedIndexMetaData)
-            replicaCountStep.execute()
-            val updatedManagedIndexMetaData = replicaCountStep.getUpdatedManagedIndexMetaData(managedIndexMetaData)
+            val replicaCountAction = ReplicaCountAction(2, 0)
+            val managedIndexMetaData = ManagedIndexMetaData("test", "indexUuid", "policy_id", null, null, null, null, null, null, null, null, null, null, null)
+            val replicaCountStep = AttemptReplicaCountStep(replicaCountAction)
+            val context = StepContext(managedIndexMetaData, clusterService, client, null, null, scriptService, settings, lockService)
+            replicaCountStep.preExecute(logger, context).execute()
+            val updatedManagedIndexMetaData = replicaCountStep.getUpdatedManagedIndexMetadata(managedIndexMetaData)
             assertEquals("Step status is not FAILED", Step.StepStatus.FAILED, updatedManagedIndexMetaData.stepMetaData?.stepStatus)
         }
     }
@@ -67,11 +55,12 @@ class AttemptSetReplicaCountStepTests : OpenSearchTestCase() {
         val client = getClient(getAdminClient(getIndicesAdminClient(null, exception)))
 
         runBlocking {
-            val replicaCountActionConfig = ReplicaCountActionConfig(2, 0)
-            val managedIndexMetaData = ManagedIndexMetaData("test", "indexUuid", "policy_id", null, null, null, null, null, null, null, null, null, null)
-            val replicaCountStep = AttemptSetReplicaCountStep(clusterService, client, replicaCountActionConfig, managedIndexMetaData)
-            replicaCountStep.execute()
-            val updatedManagedIndexMetaData = replicaCountStep.getUpdatedManagedIndexMetaData(managedIndexMetaData)
+            val replicaCountAction = ReplicaCountAction(2, 0)
+            val managedIndexMetaData = ManagedIndexMetaData("test", "indexUuid", "policy_id", null, null, null, null, null, null, null, null, null, null, null)
+            val replicaCountStep = AttemptReplicaCountStep(replicaCountAction)
+            val context = StepContext(managedIndexMetaData, clusterService, client, null, null, scriptService, settings, lockService)
+            replicaCountStep.preExecute(logger, context).execute()
+            val updatedManagedIndexMetaData = replicaCountStep.getUpdatedManagedIndexMetadata(managedIndexMetaData)
             assertEquals("Step status is not FAILED", Step.StepStatus.FAILED, updatedManagedIndexMetaData.stepMetaData?.stepStatus)
         }
     }
@@ -81,11 +70,12 @@ class AttemptSetReplicaCountStepTests : OpenSearchTestCase() {
         val client = getClient(getAdminClient(getIndicesAdminClient(null, exception)))
 
         runBlocking {
-            val replicaCountActionConfig = ReplicaCountActionConfig(2, 0)
-            val managedIndexMetaData = ManagedIndexMetaData("test", "indexUuid", "policy_id", null, null, null, null, null, null, null, null, null, null)
-            val replicaCountStep = AttemptSetReplicaCountStep(clusterService, client, replicaCountActionConfig, managedIndexMetaData)
-            replicaCountStep.execute()
-            val updatedManagedIndexMetaData = replicaCountStep.getUpdatedManagedIndexMetaData(managedIndexMetaData)
+            val replicaCountAction = ReplicaCountAction(2, 0)
+            val managedIndexMetaData = ManagedIndexMetaData("test", "indexUuid", "policy_id", null, null, null, null, null, null, null, null, null, null, null)
+            val replicaCountStep = AttemptReplicaCountStep(replicaCountAction)
+            val context = StepContext(managedIndexMetaData, clusterService, client, null, null, scriptService, settings, lockService)
+            replicaCountStep.preExecute(logger, context).execute()
+            val updatedManagedIndexMetaData = replicaCountStep.getUpdatedManagedIndexMetadata(managedIndexMetaData)
             assertEquals("Step status is not FAILED", Step.StepStatus.FAILED, updatedManagedIndexMetaData.stepMetaData?.stepStatus)
             assertEquals("Did not get cause from nested exception", "nested", updatedManagedIndexMetaData.info!!["cause"])
         }

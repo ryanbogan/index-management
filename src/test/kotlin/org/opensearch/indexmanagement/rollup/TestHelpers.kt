@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.rollup
@@ -59,8 +38,10 @@ import java.util.Locale
 
 fun randomInterval(): String = if (OpenSearchRestTestCase.randomBoolean()) randomFixedInterval() else randomCalendarInterval()
 
+@Suppress("FunctionOnlyReturningConstant")
 fun randomCalendarInterval(): String = "1d"
 
+@Suppress("FunctionOnlyReturningConstant")
 fun randomFixedInterval(): String = "30m"
 
 fun randomFixedDateHistogram(): DateHistogram = OpenSearchRestTestCase.randomAlphaOfLength(10).let {
@@ -106,7 +87,7 @@ fun randomRollupMetrics(): RollupMetrics = OpenSearchRestTestCase.randomAlphaOfL
 
 fun randomRollupDimensions(): List<Dimension> {
     val dimensions = mutableListOf<Dimension>(randomDateHistogram())
-    for (i in 0..OpenSearchRestTestCase.randomInt(10)) {
+    repeat(OpenSearchRestTestCase.randomInt(10) + 1) {
         dimensions.add(if (OpenSearchRestTestCase.randomBoolean()) randomTerms() else randomHistogram())
     }
     return dimensions.toList()

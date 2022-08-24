@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 @file:Suppress("TooManyFunctions", "MatchingDeclarationName")
@@ -37,12 +16,16 @@ import org.apache.logging.log4j.Logger
 import org.opensearch.ExceptionsHelper
 import org.opensearch.OpenSearchException
 import org.opensearch.action.ActionListener
+import org.opensearch.action.admin.indices.alias.Alias
 import org.opensearch.action.bulk.BackoffPolicy
 import org.opensearch.action.get.GetResponse
 import org.opensearch.action.search.SearchResponse
 import org.opensearch.action.support.DefaultShardOperationFailedException
 import org.opensearch.client.OpenSearchClient
 import org.opensearch.common.bytes.BytesReference
+import org.opensearch.common.io.stream.StreamInput
+import org.opensearch.common.io.stream.StreamOutput
+import org.opensearch.common.io.stream.Writeable
 import org.opensearch.common.settings.Settings
 import org.opensearch.common.unit.TimeValue
 import org.opensearch.common.util.concurrent.ThreadContext
@@ -59,9 +42,12 @@ import org.opensearch.common.xcontent.XContentParserUtils.ensureExpectedToken
 import org.opensearch.common.xcontent.XContentType
 import org.opensearch.commons.InjectSecurity
 import org.opensearch.commons.authuser.User
+import org.opensearch.commons.notifications.NotificationsPluginInterface
 import org.opensearch.index.seqno.SequenceNumbers
+import org.opensearch.indexmanagement.indexstatemanagement.action.ShrinkAction
 import org.opensearch.indexmanagement.indexstatemanagement.model.ISMTemplate
 import org.opensearch.indexmanagement.indexstatemanagement.model.Policy
+import org.opensearch.indexmanagement.snapshotmanagement.model.SMMetadata
 import org.opensearch.indexmanagement.util.NO_ID
 import org.opensearch.indexmanagement.util.SecurityUtils.Companion.DEFAULT_INJECT_ROLES
 import org.opensearch.indexmanagement.util.SecurityUtils.Companion.INTERNAL_REQUEST
@@ -74,6 +60,8 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
+
+const val OPENDISTRO_SECURITY_PROTECTED_INDICES_CONF_REQUEST = "_opendistro_security_protected_indices_conf_request"
 
 fun contentParser(bytesReference: BytesReference): XContentParser {
     return XContentHelper.createParser(
@@ -97,6 +85,16 @@ fun XContentParser.instant(): Instant? {
             null // unreachable
         }
     }
+}
+
+fun XContentBuilder.aliasesField(aliases: List<Alias>): XContentBuilder {
+    val builder = this.startArray(ShrinkAction.ALIASES_FIELD)
+    aliases.forEach {
+        builder.startObject()
+        it.toXContent(builder, ToXContent.EMPTY_PARAMS)
+        builder.endObject()
+    }
+    return builder.endArray()
 }
 
 fun XContentBuilder.optionalTimeField(name: String, instant: Instant?): XContentBuilder {
@@ -199,6 +197,8 @@ fun OpenSearchException.isRetryable(): Boolean {
  */
 fun XContentBuilder.string(): String = BytesReference.bytes(this).utf8ToString()
 
+fun XContentBuilder.toMap(): Map<String, Any> = XContentHelper.convertToMap(BytesReference.bytes(this), false, XContentType.JSON).v2()
+
 /**
  * Converts [OpenSearchClient] methods that take a callback into a kotlin suspending function.
  *
@@ -219,6 +219,20 @@ suspend fun <C : OpenSearchClient, T> C.suspendUntil(block: C.(ActionListener<T>
  * @param block - a block of code that is passed an [ActionListener] that should be passed to the LockService API.
  */
 suspend fun <T> LockService.suspendUntil(block: LockService.(ActionListener<T>) -> Unit): T =
+    suspendCoroutine { cont ->
+        block(object : ActionListener<T> {
+            override fun onResponse(response: T) = cont.resume(response)
+
+            override fun onFailure(e: Exception) = cont.resumeWithException(e)
+        })
+    }
+
+/**
+ * Converts [NotificationsPluginInterface] methods that take a callback into a kotlin suspending function.
+ *
+ * @param block - a block of code that is passed an [ActionListener] that should be passed to the NotificationsPluginInterface API.
+ */
+suspend fun <T> NotificationsPluginInterface.suspendUntil(block: NotificationsPluginInterface.(ActionListener<T>) -> Unit): T =
     suspendCoroutine { cont ->
         block(object : ActionListener<T> {
             override fun onResponse(response: T) = cont.resume(response)
@@ -294,5 +308,46 @@ suspend fun <T> withClosableContext(
         return withContext(context) { block() }
     } finally {
         context.injector.close()
+    }
+}
+
+fun XContentBuilder.optionalField(name: String, value: Any?): XContentBuilder {
+    return if (value != null) { this.field(name, value) } else this
+}
+
+fun XContentBuilder.optionalInfoField(name: String, info: SMMetadata.Info?): XContentBuilder {
+    return if (info != null) {
+        if (info.message != null || info.cause != null) {
+            this.field(name, info)
+        } else {
+            this
+        }
+    } else this
+}
+
+inline fun <T> XContentParser.nullValueHandler(block: XContentParser.() -> T): T? {
+    return if (currentToken() == Token.VALUE_NULL) null else block()
+}
+
+inline fun <T> XContentParser.parseArray(block: XContentParser.() -> T): List<T> {
+    val resArr = mutableListOf<T>()
+    ensureExpectedToken(Token.START_ARRAY, currentToken(), this)
+    while (nextToken() != Token.END_ARRAY) {
+        resArr.add(block())
+    }
+    return resArr
+}
+
+// similar to readOptionalWriteable
+fun <T> StreamInput.readOptionalValue(reader: Writeable.Reader<T>): T? {
+    return if (readBoolean()) { reader.read(this) } else null
+}
+
+fun <T> StreamOutput.writeOptionalValue(value: T, writer: Writeable.Writer<T>) {
+    if (value == null) {
+        writeBoolean(false)
+    } else {
+        writeBoolean(true)
+        writer.write(this, value)
     }
 }

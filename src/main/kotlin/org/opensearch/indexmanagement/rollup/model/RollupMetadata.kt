@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.rollup.model
@@ -39,6 +18,7 @@ import org.opensearch.common.xcontent.XContentParserUtils.ensureExpectedToken
 import org.opensearch.index.seqno.SequenceNumbers
 import org.opensearch.indexmanagement.indexstatemanagement.util.WITH_TYPE
 import org.opensearch.indexmanagement.opensearchapi.instant
+import org.opensearch.indexmanagement.util.NO_ID
 import org.opensearch.search.aggregations.bucket.composite.InternalComposite
 import java.io.IOException
 import java.time.Instant
@@ -249,7 +229,6 @@ data class RollupMetadata(
 
     companion object {
         const val ROLLUP_METADATA_TYPE = "rollup_metadata"
-        const val NO_ID = ""
         const val ROLLUP_ID_FIELD = "rollup_id"
         const val AFTER_KEY_FIELD = "after_key"
         const val LAST_UPDATED_FIELD = "last_updated_time"
@@ -286,7 +265,7 @@ data class RollupMetadata(
                     AFTER_KEY_FIELD -> afterKey = xcp.map()
                     LAST_UPDATED_FIELD -> lastUpdatedTime = xcp.instant()
                     CONTINUOUS_FIELD -> continuous = ContinuousMetadata.parse(xcp)
-                    STATUS_FIELD -> status = Status.valueOf(xcp.text().toUpperCase(Locale.ROOT))
+                    STATUS_FIELD -> status = Status.valueOf(xcp.text().uppercase(Locale.ROOT))
                     FAILURE_REASON -> failureReason = xcp.textOrNull()
                     STATS_FIELD -> stats = RollupStats.parse(xcp)
                 }

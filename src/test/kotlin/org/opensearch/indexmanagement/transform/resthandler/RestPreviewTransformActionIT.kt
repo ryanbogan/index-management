@@ -1,12 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
  */
 
 package org.opensearch.indexmanagement.transform.resthandler
@@ -44,6 +38,7 @@ class RestPreviewTransformActionIT : TransformRestTestCase() {
         try {
             indexExists = indexExists(sourceIndex)
         } catch (e: IndexNotFoundException) {
+            // If this exception is thrown, indexExists will be false anyways
         }
         if (!indexExists) {
             generateNYCTaxiData(sourceIndex)

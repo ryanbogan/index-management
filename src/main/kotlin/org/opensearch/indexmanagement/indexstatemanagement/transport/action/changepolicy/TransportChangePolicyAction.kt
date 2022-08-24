@@ -1,31 +1,13 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.transport.action.changepolicy
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.apache.logging.log4j.LogManager
 import org.opensearch.ExceptionsHelper
 import org.opensearch.OpenSearchSecurityException
@@ -44,32 +26,38 @@ import org.opensearch.action.support.HandledTransportAction
 import org.opensearch.action.support.IndicesOptions
 import org.opensearch.action.support.master.AcknowledgedResponse
 import org.opensearch.client.node.NodeClient
-import org.opensearch.cluster.ClusterState
+import org.opensearch.cluster.metadata.IndexMetadata
 import org.opensearch.cluster.service.ClusterService
 import org.opensearch.common.inject.Inject
 import org.opensearch.common.settings.Settings
 import org.opensearch.common.xcontent.NamedXContentRegistry
+import org.opensearch.commons.ConfigConstants
 import org.opensearch.commons.authuser.User
 import org.opensearch.index.Index
 import org.opensearch.indexmanagement.IndexManagementPlugin
+import org.opensearch.indexmanagement.indexstatemanagement.DefaultIndexMetadataService
+import org.opensearch.indexmanagement.indexstatemanagement.IndexMetadataProvider
 import org.opensearch.indexmanagement.indexstatemanagement.model.ManagedIndexConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.ManagedIndexMetaData
 import org.opensearch.indexmanagement.indexstatemanagement.model.Policy
 import org.opensearch.indexmanagement.indexstatemanagement.model.coordinator.SweptManagedIndexConfig
 import org.opensearch.indexmanagement.indexstatemanagement.opensearchapi.buildMgetMetadataRequest
 import org.opensearch.indexmanagement.indexstatemanagement.opensearchapi.getManagedIndexMetadata
-import org.opensearch.indexmanagement.indexstatemanagement.opensearchapi.mgetResponseToList
+import org.opensearch.indexmanagement.indexstatemanagement.opensearchapi.mgetResponseToMap
 import org.opensearch.indexmanagement.indexstatemanagement.resthandler.RestChangePolicyAction
 import org.opensearch.indexmanagement.indexstatemanagement.transport.action.ISMStatusResponse
 import org.opensearch.indexmanagement.indexstatemanagement.transport.action.managedIndex.ManagedIndexAction
 import org.opensearch.indexmanagement.indexstatemanagement.transport.action.managedIndex.ManagedIndexRequest
+import org.opensearch.indexmanagement.indexstatemanagement.util.DEFAULT_INDEX_TYPE
 import org.opensearch.indexmanagement.indexstatemanagement.util.FailedIndex
 import org.opensearch.indexmanagement.indexstatemanagement.util.isSafeToChange
+import org.opensearch.indexmanagement.indexstatemanagement.util.managedIndexMetadataID
 import org.opensearch.indexmanagement.indexstatemanagement.util.updateManagedIndexRequest
 import org.opensearch.indexmanagement.opensearchapi.contentParser
 import org.opensearch.indexmanagement.opensearchapi.parseFromGetResponse
 import org.opensearch.indexmanagement.opensearchapi.parseWithType
 import org.opensearch.indexmanagement.settings.IndexManagementSettings
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ISMIndexMetadata
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ManagedIndexMetaData
 import org.opensearch.indexmanagement.util.IndexManagementException
 import org.opensearch.indexmanagement.util.IndexUtils
 import org.opensearch.indexmanagement.util.NO_ID
@@ -84,14 +72,15 @@ import java.lang.IllegalArgumentException
 
 private val log = LogManager.getLogger(TransportChangePolicyAction::class.java)
 
-@Suppress("SpreadOperator", "TooManyFunctions")
+@Suppress("SpreadOperator", "TooManyFunctions", "LongParameterList")
 class TransportChangePolicyAction @Inject constructor(
     val client: NodeClient,
     transportService: TransportService,
     actionFilters: ActionFilters,
     val clusterService: ClusterService,
     val settings: Settings,
-    val xContentRegistry: NamedXContentRegistry
+    val xContentRegistry: NamedXContentRegistry,
+    val indexMetadataProvider: IndexMetadataProvider
 ) : HandledTransportAction<ChangePolicyRequest, ISMStatusResponse>(
     ChangePolicyAction.NAME, transportService, actionFilters, ::ChangePolicyRequest
 ) {
@@ -118,12 +107,18 @@ class TransportChangePolicyAction @Inject constructor(
         private val failedIndices = mutableListOf<FailedIndex>()
         private val managedIndicesToUpdate = mutableListOf<Pair<String, String>>()
         private val indexUuidToCurrentState = mutableMapOf<String, String>()
+        private val indicesToUpdate = mutableMapOf<String, String>() // uuid -> name
+        private val indexUuidToIndexMetadata = mutableMapOf<String, IndexMetadata>() // uuid -> indexmetadata
         private val changePolicy = request.changePolicy
         private lateinit var policy: Policy
-        private lateinit var clusterState: ClusterState
         private var updated: Int = 0
 
         fun start() {
+            log.debug(
+                "User and roles string from thread context: ${client.threadPool().threadContext.getTransient<String>(
+                    ConfigConstants.OPENSEARCH_SECURITY_USER_INFO_THREAD_CONTEXT
+                )}"
+            )
             if (user == null) {
                 getPolicy()
             } else {
@@ -169,6 +164,7 @@ class TransportChangePolicyAction @Inject constructor(
             }
         }
 
+        @Suppress("ReturnCount")
         private fun onGetPolicyResponse(response: GetResponse) {
             if (!response.isExists || response.isSourceEmpty) {
                 actionListener.onFailure(OpenSearchStatusException("Could not find policy=${request.changePolicy.policyID}", RestStatus.NOT_FOUND))
@@ -202,50 +198,92 @@ class TransportChangePolicyAction @Inject constructor(
                 return
             }
 
-            getClusterState()
+            getIndicesToUpdate()
+        }
+
+        private fun getIndicesToUpdate() {
+            CoroutineScope(Dispatchers.IO).launch {
+                val indexNameToMetadata: MutableMap<String, ISMIndexMetadata> = HashMap()
+                try {
+                    indexNameToMetadata.putAll(indexMetadataProvider.getISMIndexMetadataByType(request.indexType, request.indices))
+                } catch (e: Exception) {
+                    actionListener.onFailure(ExceptionsHelper.unwrapCause(e) as Exception)
+                    return@launch
+                }
+                indexNameToMetadata.forEach { (indexName, indexMetadata) ->
+                    indicesToUpdate.putIfAbsent(indexMetadata.indexUuid, indexName)
+                }
+                if (request.indexType == DEFAULT_INDEX_TYPE) {
+                    getClusterState()
+                } else {
+                    getManagedIndexMetadata()
+                }
+            }
         }
 
         @Suppress("SpreadOperator")
         private fun getClusterState() {
+            val strictExpandOptions = IndicesOptions.strictExpand()
             val clusterStateRequest = ClusterStateRequest()
                 .clear()
                 .indices(*request.indices.toTypedArray())
                 .metadata(true)
                 .local(false)
-                .indicesOptions(IndicesOptions.strictExpand())
+                .indicesOptions(strictExpandOptions)
+            client.admin()
+                .cluster()
+                .state(
+                    clusterStateRequest,
+                    object : ActionListener<ClusterStateResponse> {
+                        override fun onResponse(response: ClusterStateResponse) {
+                            val clusterState = response.state
+                            val defaultIndexMetadataService = indexMetadataProvider.services[DEFAULT_INDEX_TYPE] as DefaultIndexMetadataService
+                            clusterState.metadata.indices.forEach {
+                                val indexUUID = defaultIndexMetadataService.getCustomIndexUUID(it.value)
+                                indexUuidToIndexMetadata[indexUUID] = it.value
+                            }
+                            // ISMIndexMetadata from the default index metadata service uses lenient expand, we want to use strict expand, filter
+                            // out the indices which are not also in the strict expand response
+                            indicesToUpdate.filter { indexUuidToIndexMetadata.containsKey(it.key) }
+                            getManagedIndexMetadata()
+                        }
 
-            client.admin().cluster().state(clusterStateRequest, ActionListener.wrap(::onClusterStateResponse, ::onFailure))
+                        override fun onFailure(t: Exception) {
+                            actionListener.onFailure(ExceptionsHelper.unwrapCause(t) as Exception)
+                        }
+                    }
+                )
         }
 
-        @Suppress("ComplexMethod")
-        private fun onClusterStateResponse(response: ClusterStateResponse) {
-            clusterState = response.state
-
-            // get back managed index metadata
-            client.multiGet(buildMgetMetadataRequest(clusterState), ActionListener.wrap(::onMgetMetadataResponse, ::onFailure))
+        private fun getManagedIndexMetadata() {
+            client.multiGet(
+                buildMgetMetadataRequest(indicesToUpdate.toList().map { it.first }),
+                ActionListener.wrap(::onMgetMetadataResponse, ::onFailure)
+            )
         }
 
         @Suppress("ComplexMethod")
         private fun onMgetMetadataResponse(mgetResponse: MultiGetResponse) {
-            val metadataList = mgetResponseToList(mgetResponse)
+            val metadataMap = mgetResponseToMap(mgetResponse)
             val includedStates = changePolicy.include.map { it.state }.toSet()
 
-            clusterState.metadata.indices.forEachIndexed { ind, it ->
-                val indexMetaData = it.value
-                val clusterStateMetadata = it.value.getManagedIndexMetadata()
-                val mgetFailure = metadataList[ind]?.second
-                val managedIndexMetadata: ManagedIndexMetaData? = metadataList[ind]?.first
+            indicesToUpdate.forEach { (indexUuid, indexName) ->
+                // indexMetaData and clusterStateMetadata will be null for non-default index types
+                val indexMetaData = indexUuidToIndexMetadata[indexUuid]
+                val clusterStateMetadata = indexMetaData?.getManagedIndexMetadata()
+                val mgetFailure = metadataMap[indexUuid]?.second
+                val managedIndexMetadata: ManagedIndexMetaData? = metadataMap[managedIndexMetadataID(indexUuid)]?.first
 
                 val currentState = managedIndexMetadata?.stateMetaData?.name
                 if (currentState != null) {
-                    indexUuidToCurrentState[indexMetaData.indexUUID] = currentState
+                    indexUuidToCurrentState[indexUuid] = currentState
                 }
 
                 when {
                     mgetFailure != null ->
                         failedIndices.add(
                             FailedIndex(
-                                indexMetaData.index.name, indexMetaData.index.uuid,
+                                indexName, indexUuid,
                                 "Failed to get managed index metadata, $mgetFailure"
                             )
                         )
@@ -254,7 +292,7 @@ class TransportChangePolicyAction @Inject constructor(
                     managedIndexMetadata?.transitionTo != null ->
                         failedIndices.add(
                             FailedIndex(
-                                indexMetaData.index.name, indexMetaData.index.uuid,
+                                indexName, indexUuid,
                                 RestChangePolicyAction.INDEX_IN_TRANSITION
                             )
                         )
@@ -263,21 +301,21 @@ class TransportChangePolicyAction @Inject constructor(
                         if (clusterStateMetadata != null) {
                             failedIndices.add(
                                 FailedIndex(
-                                    indexMetaData.index.name, indexMetaData.index.uuid,
+                                    indexName, indexUuid,
                                     "Cannot change policy until metadata has finished migrating"
                                 )
                             )
                         } else {
-                            managedIndicesToUpdate.add(indexMetaData.index.name to indexMetaData.index.uuid)
+                            managedIndicesToUpdate.add(indexName to indexUuid)
                         }
                     }
                     // else if the includedStates is empty (i.e. not being used) then we will always try to update the managed index
-                    includedStates.isEmpty() -> managedIndicesToUpdate.add(indexMetaData.index.name to indexMetaData.index.uuid)
+                    includedStates.isEmpty() -> managedIndicesToUpdate.add(indexName to indexUuid)
                     // else only update the managed index if its currently in one of the included states
                     includedStates.contains(managedIndexMetadata.stateMetaData?.name) ->
-                        managedIndicesToUpdate.add(indexMetaData.index.name to indexMetaData.index.uuid)
+                        managedIndicesToUpdate.add(indexName to indexUuid)
                     // else the managed index did not match any of the included state filters and we will not update it
-                    else -> log.debug("Skipping ${indexMetaData.index.name} as it does not match any of the include state filters")
+                    else -> log.debug("Skipping $indexName as it does not match any of the include state filters")
                 }
             }
 

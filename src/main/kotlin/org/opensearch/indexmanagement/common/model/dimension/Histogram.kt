@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.common.model.dimension
@@ -34,6 +13,8 @@ import org.opensearch.common.xcontent.XContentParser
 import org.opensearch.common.xcontent.XContentParser.Token
 import org.opensearch.common.xcontent.XContentParserUtils.ensureExpectedToken
 import org.opensearch.index.mapper.NumberFieldMapper
+import org.opensearch.index.query.AbstractQueryBuilder
+import org.opensearch.index.query.RangeQueryBuilder
 import org.opensearch.indexmanagement.util.IndexUtils.Companion.getFieldFromMappings
 import org.opensearch.search.aggregations.AggregatorFactories
 import org.opensearch.search.aggregations.bucket.composite.CompositeValuesSourceBuilder
@@ -84,6 +65,15 @@ data class Histogram(
             .interval(this.interval)
     }
 
+    override fun toBucketQuery(bucketKey: Any): AbstractQueryBuilder<*> {
+        if (bucketKey !is Double) {
+            throw IllegalArgumentException("Received invalid histogram bucket key type [${bucketKey::class}] when Double is expected.")
+        }
+        return RangeQueryBuilder(sourceField)
+            .from(bucketKey - Companion.bucketError, true)
+            .to(bucketKey + interval + Companion.bucketError, true)
+    }
+
     override fun canBeRealizedInMappings(mappings: Map<String, Any>): Boolean {
         val fieldType = getFieldFromMappings(sourceField, mappings)?.get("type") ?: return false
 
@@ -119,6 +109,9 @@ data class Histogram(
 
     companion object {
         const val HISTOGRAM_INTERVAL_FIELD = "interval"
+        // There can be rounding issues with small intervals where the range query will select documents differently than the Histogram
+        // so add an error to the range query and then limit the buckets indexed later.
+        private const val bucketError = 0.00005
 
         @Suppress("ComplexMethod", "LongMethod")
         @JvmStatic

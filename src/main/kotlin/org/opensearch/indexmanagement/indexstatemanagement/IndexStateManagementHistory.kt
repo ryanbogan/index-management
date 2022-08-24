@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement
@@ -45,18 +24,17 @@ import org.opensearch.cluster.service.ClusterService
 import org.opensearch.common.settings.Settings
 import org.opensearch.common.xcontent.ToXContent
 import org.opensearch.common.xcontent.XContentFactory
-import org.opensearch.common.xcontent.XContentType
 import org.opensearch.indexmanagement.IndexManagementIndices
 import org.opensearch.indexmanagement.IndexManagementPlugin
-import org.opensearch.indexmanagement.indexstatemanagement.model.ManagedIndexMetaData
 import org.opensearch.indexmanagement.indexstatemanagement.settings.ManagedIndexSettings
-import org.opensearch.indexmanagement.indexstatemanagement.step.Step
 import org.opensearch.indexmanagement.indexstatemanagement.util.INDEX_HIDDEN
 import org.opensearch.indexmanagement.indexstatemanagement.util.INDEX_NUMBER_OF_REPLICAS
 import org.opensearch.indexmanagement.indexstatemanagement.util.INDEX_NUMBER_OF_SHARDS
+import org.opensearch.indexmanagement.opensearchapi.OPENDISTRO_SECURITY_PROTECTED_INDICES_CONF_REQUEST
 import org.opensearch.indexmanagement.opensearchapi.suspendUntil
+import org.opensearch.indexmanagement.spi.indexstatemanagement.Step
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ManagedIndexMetaData
 import org.opensearch.indexmanagement.util.OpenForTesting
-import org.opensearch.indexmanagement.util._DOC
 import org.opensearch.threadpool.Scheduler
 import org.opensearch.threadpool.ThreadPool
 import java.time.Instant
@@ -134,8 +112,16 @@ class IndexStateManagementHistory(
     }
 
     private fun rolloverAndDeleteHistoryIndex() {
-        if (historyEnabled) rolloverHistoryIndex()
-        deleteOldHistoryIndex()
+        val ctx = threadPool.threadContext.stashContext()
+        try {
+            if (threadPool.threadContext.getTransient<String?>(OPENDISTRO_SECURITY_PROTECTED_INDICES_CONF_REQUEST) == null) {
+                threadPool.threadContext.putTransient(OPENDISTRO_SECURITY_PROTECTED_INDICES_CONF_REQUEST, "true")
+            }
+            if (historyEnabled) rolloverHistoryIndex()
+            deleteOldHistoryIndex()
+        } finally {
+            ctx.close()
+        }
     }
 
     private fun rolloverHistoryIndex() {
@@ -146,7 +132,7 @@ class IndexStateManagementHistory(
         // We have to pass null for newIndexName in order to get Elastic to increment the index count.
         val request = RolloverRequest(IndexManagementIndices.HISTORY_WRITE_INDEX_ALIAS, null)
         request.createIndexRequest.index(IndexManagementIndices.HISTORY_INDEX_PATTERN)
-            .mapping(_DOC, IndexManagementIndices.indexStateManagementHistoryMappings, XContentType.JSON)
+            .mapping(IndexManagementIndices.indexStateManagementHistoryMappings)
             .settings(
                 Settings.builder()
                     .put(INDEX_HIDDEN, true)
@@ -207,7 +193,7 @@ class IndexStateManagementHistory(
     }
 
     private fun getIndicesToDelete(clusterStateResponse: ClusterStateResponse): List<String> {
-        var indicesToDelete = mutableListOf<String>()
+        val indicesToDelete = mutableListOf<String>()
         for (entry in clusterStateResponse.state.metadata.indices()) {
             val indexMetaData = entry.value
             val creationTime = indexMetaData.creationDate

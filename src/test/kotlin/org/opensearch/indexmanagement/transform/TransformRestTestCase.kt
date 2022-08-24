@@ -1,12 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
  */
 
 package org.opensearch.indexmanagement.transform
@@ -16,6 +10,7 @@ import org.apache.http.HttpHeaders
 import org.apache.http.entity.ContentType.APPLICATION_JSON
 import org.apache.http.entity.StringEntity
 import org.apache.http.message.BasicHeader
+import org.junit.AfterClass
 import org.opensearch.client.Response
 import org.opensearch.client.ResponseException
 import org.opensearch.common.settings.Settings
@@ -43,12 +38,18 @@ import java.time.Instant
 
 abstract class TransformRestTestCase : IndexManagementRestTestCase() {
 
+    companion object {
+        @AfterClass @JvmStatic fun clearIndicesAfterClassCompletion() {
+            wipeAllIndices()
+        }
+    }
+
     override fun preserveIndicesUponCompletion(): Boolean = true
 
     protected fun createTransform(
         transform: Transform,
         transformId: String = randomAlphaOfLength(10),
-        refresh: Boolean = true
+        refresh: Boolean = true,
     ): Transform {
         if (!indexExists(transform.sourceIndex)) {
             createTransformSourceIndex(transform)
@@ -69,7 +70,7 @@ abstract class TransformRestTestCase : IndexManagementRestTestCase() {
     private fun createTransformJson(
         transformString: String,
         transformId: String,
-        refresh: Boolean = true
+        refresh: Boolean = true,
     ): Response {
         val response = client()
             .makeRequest(
@@ -80,6 +81,16 @@ abstract class TransformRestTestCase : IndexManagementRestTestCase() {
             )
         assertEquals("Unable to create a new transform", RestStatus.CREATED, response.restStatus())
         return response
+    }
+
+    protected fun disableTransform(transformId: String) {
+        val response = client()
+            .makeRequest(
+                "POST",
+                "$TRANSFORM_BASE_URI/$transformId/_stop",
+                emptyMap()
+            )
+        assertEquals("Unable to disable transform $transformId", RestStatus.OK, response.restStatus())
     }
 
     protected fun createRandomTransform(refresh: Boolean = true): Transform {
@@ -135,7 +146,7 @@ abstract class TransformRestTestCase : IndexManagementRestTestCase() {
 
     protected fun getTransform(
         transformId: String,
-        header: BasicHeader = BasicHeader(HttpHeaders.CONTENT_TYPE, "application/json")
+        header: BasicHeader = BasicHeader(HttpHeaders.CONTENT_TYPE, "application/json"),
     ): Transform {
         val response = client().makeRequest("GET", "$TRANSFORM_BASE_URI/$transformId", null, header)
         assertEquals("Unable to get transform $transformId", RestStatus.OK, response.restStatus())
@@ -163,7 +174,7 @@ abstract class TransformRestTestCase : IndexManagementRestTestCase() {
 
     protected fun getTransformMetadata(
         metadataId: String,
-        header: BasicHeader = BasicHeader(HttpHeaders.CONTENT_TYPE, "application/json")
+        header: BasicHeader = BasicHeader(HttpHeaders.CONTENT_TYPE, "application/json"),
     ): TransformMetadata {
         val response = client().makeRequest("GET", "$INDEX_MANAGEMENT_INDEX/_doc/$metadataId", null, header)
         assertEquals("Unable to get transform metadata $metadataId", RestStatus.OK, response.restStatus())
@@ -188,6 +199,21 @@ abstract class TransformRestTestCase : IndexManagementRestTestCase() {
         }
 
         return metadata
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    protected fun getTransformDocumentsBehind(
+        transformId: String,
+        header: BasicHeader = BasicHeader(HttpHeaders.CONTENT_TYPE, "application/json"),
+    ): Map<String, Any> {
+        val explainResponse = client().makeRequest("GET", "$TRANSFORM_BASE_URI/$transformId/_explain", null, header)
+        assertEquals(RestStatus.OK, explainResponse.restStatus())
+
+        val explainResponseMap = explainResponse.asMap()
+        val explainMetadata = explainResponseMap[transformId] as Map<String, Any>
+        val metadata = explainMetadata["transform_metadata"] as Map<String, Any>
+        val continuousStats = metadata["continuous_stats"] as Map<String, Any>
+        return continuousStats["documents_behind"] as Map<String, Long>
     }
 
     protected fun updateTransformStartTime(update: Transform, desiredStartTimeMillis: Long? = null) {
@@ -222,6 +248,6 @@ abstract class TransformRestTestCase : IndexManagementRestTestCase() {
     protected fun Transform.toHttpEntity(): HttpEntity = StringEntity(toJsonString(), APPLICATION_JSON)
 
     override fun xContentRegistry(): NamedXContentRegistry {
-        return NamedXContentRegistry(SearchModule(Settings.EMPTY, false, emptyList()).namedXContents)
+        return NamedXContentRegistry(SearchModule(Settings.EMPTY, emptyList()).namedXContents)
     }
 }

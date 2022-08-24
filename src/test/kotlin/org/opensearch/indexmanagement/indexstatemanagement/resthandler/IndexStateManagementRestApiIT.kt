@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.resthandler
@@ -34,14 +13,16 @@ import org.opensearch.common.xcontent.XContentType
 import org.opensearch.common.xcontent.json.JsonXContent.jsonXContent
 import org.opensearch.indexmanagement.IndexManagementPlugin.Companion.INDEX_MANAGEMENT_INDEX
 import org.opensearch.indexmanagement.IndexManagementPlugin.Companion.POLICY_BASE_URI
+import org.opensearch.indexmanagement.indexstatemanagement.ISMActionsParser
 import org.opensearch.indexmanagement.indexstatemanagement.IndexStateManagementRestTestCase
+import org.opensearch.indexmanagement.indexstatemanagement.action.ReadOnlyAction
 import org.opensearch.indexmanagement.indexstatemanagement.model.Policy
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ActionConfig
 import org.opensearch.indexmanagement.indexstatemanagement.randomPolicy
 import org.opensearch.indexmanagement.indexstatemanagement.randomReadOnlyActionConfig
 import org.opensearch.indexmanagement.indexstatemanagement.randomState
 import org.opensearch.indexmanagement.indexstatemanagement.settings.ManagedIndexSettings
 import org.opensearch.indexmanagement.makeRequest
+import org.opensearch.indexmanagement.util.NO_ID
 import org.opensearch.indexmanagement.util._ID
 import org.opensearch.indexmanagement.util._PRIMARY_TERM
 import org.opensearch.indexmanagement.util._SEQ_NO
@@ -91,7 +72,7 @@ class IndexStateManagementRestApiIT : IndexStateManagementRestTestCase() {
         val createdId = responseBody["_id"] as String
         val createdSeqNo = responseBody[_SEQ_NO] as Int
         val createdPrimaryTerm = responseBody[_PRIMARY_TERM] as Int
-        assertNotEquals("response is missing Id", Policy.NO_ID, createdId)
+        assertNotEquals("response is missing Id", NO_ID, createdId)
         assertEquals("not same id", policyId, createdId)
         assertEquals("incorrect seqNo", 0, createdSeqNo)
         assertEquals("incorrect primaryTerm", 1, createdPrimaryTerm)
@@ -114,8 +95,8 @@ class IndexStateManagementRestApiIT : IndexStateManagementRestTestCase() {
     fun `test creating a policy with a disallowed actions fails`() {
         try {
             // remove read_only from the allowlist
-            val allowedActions = ActionConfig.ActionType.values().toList()
-                .filter { actionType -> actionType != ActionConfig.ActionType.READ_ONLY }
+            val allowedActions = ISMActionsParser.instance.parsers.map { it.getActionType() }.toList()
+                .filter { actionType -> actionType != ReadOnlyAction.name }
                 .joinToString(prefix = "[", postfix = "]") { string -> "\"$string\"" }
             updateClusterSetting(ManagedIndexSettings.ALLOW_LIST.key, allowedActions, escapeValue = false)
             val policy = randomPolicy(states = listOf(randomState(actions = listOf(randomReadOnlyActionConfig()))))
@@ -130,8 +111,8 @@ class IndexStateManagementRestApiIT : IndexStateManagementRestTestCase() {
     fun `test updating a policy with a disallowed actions fails`() {
         try {
             // remove read_only from the allowlist
-            val allowedActions = ActionConfig.ActionType.values().toList()
-                .filter { actionType -> actionType != ActionConfig.ActionType.READ_ONLY }
+            val allowedActions = ISMActionsParser.instance.parsers.map { it.getActionType() }.toList()
+                .filter { actionType -> actionType != ReadOnlyAction.name }
                 .joinToString(prefix = "[", postfix = "]") { string -> "\"$string\"" }
             updateClusterSetting(ManagedIndexSettings.ALLOW_LIST.key, allowedActions, escapeValue = false)
             // createRandomPolicy currently does not create a random list of actions so it won't accidentally create one with read_only
@@ -209,7 +190,7 @@ class IndexStateManagementRestApiIT : IndexStateManagementRestTestCase() {
         val responseBody = updateResponse.asMap()
         val updatedId = responseBody[_ID] as String
         val updatedSeqNo = (responseBody[_SEQ_NO] as Int).toLong()
-        assertNotEquals("response is missing Id", Policy.NO_ID, updatedId)
+        assertNotEquals("response is missing Id", NO_ID, updatedId)
         assertEquals("not same id", policy.id, updatedId)
         assertTrue("incorrect seqNo", policy.seqNo < updatedSeqNo)
     }
@@ -306,6 +287,44 @@ class IndexStateManagementRestApiIT : IndexStateManagementRestTestCase() {
         val policy = createRandomPolicy()
 
         val response = client().makeRequest(RestRequest.Method.GET.toString(), POLICY_BASE_URI)
+
+        val actualMessage = response.asMap()
+        val expectedMessage = mapOf(
+            "total_policies" to 1,
+            "policies" to listOf(
+                mapOf(
+                    _SEQ_NO to policy.seqNo,
+                    _ID to policy.id,
+                    _PRIMARY_TERM to policy.primaryTerm,
+                    Policy.POLICY_TYPE to mapOf(
+                        "schema_version" to policy.schemaVersion,
+                        "policy_id" to policy.id,
+                        "last_updated_time" to policy.lastUpdatedTime.toEpochMilli(),
+                        "default_state" to policy.defaultState,
+                        "ism_template" to null,
+                        "description" to policy.description,
+                        "error_notification" to policy.errorNotification,
+                        "states" to policy.states.map {
+                            mapOf(
+                                "name" to it.name,
+                                "transitions" to it.transitions,
+                                "actions" to it.actions
+                            )
+                        }
+                    )
+                )
+            )
+        )
+
+        assertEquals(expectedMessage.toString(), actualMessage.toString())
+    }
+
+    fun `test get policies with hyphen`() {
+        val randomPolicy = randomPolicy(id = "testing-hyphens-01")
+        createPolicy(randomPolicy, policyId = randomPolicy.id, refresh = true)
+        val policy = getPolicy(randomPolicy.id)
+
+        val response = client().makeRequest(RestRequest.Method.GET.toString(), "$POLICY_BASE_URI?queryString=*testing-hyphens*")
 
         val actualMessage = response.asMap()
         val expectedMessage = mapOf(

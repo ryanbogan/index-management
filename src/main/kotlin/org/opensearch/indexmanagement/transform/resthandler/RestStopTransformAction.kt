@@ -1,12 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
  */
 
 package org.opensearch.indexmanagement.transform.resthandler
@@ -15,7 +9,7 @@ import org.opensearch.client.node.NodeClient
 import org.opensearch.indexmanagement.IndexManagementPlugin.Companion.TRANSFORM_BASE_URI
 import org.opensearch.indexmanagement.transform.action.stop.StopTransformAction
 import org.opensearch.indexmanagement.transform.action.stop.StopTransformRequest
-import org.opensearch.indexmanagement.transform.model.Transform
+import org.opensearch.indexmanagement.util.NO_ID
 import org.opensearch.rest.BaseRestHandler
 import org.opensearch.rest.BaseRestHandler.RestChannelConsumer
 import org.opensearch.rest.RestHandler.Route
@@ -38,8 +32,8 @@ class RestStopTransformAction : BaseRestHandler() {
 
     @Throws(IOException::class)
     override fun prepareRequest(request: RestRequest, client: NodeClient): RestChannelConsumer {
-        val id = request.param("transformID", Transform.NO_ID)
-        if (Transform.NO_ID == id) {
+        val id = request.param("transformID", NO_ID)
+        if (NO_ID == id) {
             throw IllegalArgumentException("Missing transform ID")
         }
 

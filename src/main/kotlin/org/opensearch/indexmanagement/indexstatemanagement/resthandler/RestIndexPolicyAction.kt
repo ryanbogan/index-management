@@ -1,32 +1,10 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.resthandler
 
-import org.apache.logging.log4j.LogManager
 import org.opensearch.action.support.WriteRequest
 import org.opensearch.client.node.NodeClient
 import org.opensearch.cluster.service.ClusterService
@@ -40,10 +18,10 @@ import org.opensearch.indexmanagement.indexstatemanagement.settings.ManagedIndex
 import org.opensearch.indexmanagement.indexstatemanagement.transport.action.indexpolicy.IndexPolicyAction
 import org.opensearch.indexmanagement.indexstatemanagement.transport.action.indexpolicy.IndexPolicyRequest
 import org.opensearch.indexmanagement.indexstatemanagement.transport.action.indexpolicy.IndexPolicyResponse
-import org.opensearch.indexmanagement.indexstatemanagement.util.getDisallowedActions
 import org.opensearch.indexmanagement.opensearchapi.parseWithType
 import org.opensearch.indexmanagement.util.IF_PRIMARY_TERM
 import org.opensearch.indexmanagement.util.IF_SEQ_NO
+import org.opensearch.indexmanagement.util.NO_ID
 import org.opensearch.indexmanagement.util.REFRESH
 import org.opensearch.rest.BaseRestHandler
 import org.opensearch.rest.BaseRestHandler.RestChannelConsumer
@@ -57,8 +35,6 @@ import org.opensearch.rest.RestStatus
 import org.opensearch.rest.action.RestResponseListener
 import java.io.IOException
 import java.time.Instant
-
-private val log = LogManager.getLogger(RestIndexPolicyAction::class.java)
 
 class RestIndexPolicyAction(
     settings: Settings,
@@ -94,8 +70,8 @@ class RestIndexPolicyAction(
 
     @Throws(IOException::class)
     override fun prepareRequest(request: RestRequest, client: NodeClient): RestChannelConsumer {
-        val id = request.param("policyID", Policy.NO_ID)
-        if (Policy.NO_ID == id) {
+        val id = request.param("policyID", NO_ID)
+        if (NO_ID == id) {
             throw IllegalArgumentException("Missing policy ID")
         }
 

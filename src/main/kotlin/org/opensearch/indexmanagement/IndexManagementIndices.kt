@@ -1,33 +1,14 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 @file:Suppress("ReturnCount")
 package org.opensearch.indexmanagement
 
 import org.apache.logging.log4j.LogManager
+import org.apache.logging.log4j.Logger
+import org.opensearch.OpenSearchStatusException
 import org.opensearch.ResourceAlreadyExistsException
 import org.opensearch.action.ActionListener
 import org.opensearch.action.admin.indices.alias.Alias
@@ -40,7 +21,6 @@ import org.opensearch.client.Client
 import org.opensearch.client.IndicesAdminClient
 import org.opensearch.cluster.service.ClusterService
 import org.opensearch.common.settings.Settings
-import org.opensearch.common.xcontent.XContentType
 import org.opensearch.indexmanagement.IndexManagementPlugin.Companion.INDEX_MANAGEMENT_INDEX
 import org.opensearch.indexmanagement.indexstatemanagement.settings.ManagedIndexSettings
 import org.opensearch.indexmanagement.indexstatemanagement.util.INDEX_HIDDEN
@@ -49,7 +29,10 @@ import org.opensearch.indexmanagement.indexstatemanagement.util.INDEX_NUMBER_OF_
 import org.opensearch.indexmanagement.opensearchapi.suspendUntil
 import org.opensearch.indexmanagement.util.IndexUtils
 import org.opensearch.indexmanagement.util.OpenForTesting
-import org.opensearch.indexmanagement.util._DOC
+import org.opensearch.rest.RestStatus
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.suspendCoroutine
 
 @OpenForTesting
 class IndexManagementIndices(
@@ -75,7 +58,7 @@ class IndexManagementIndices(
     fun checkAndUpdateIMConfigIndex(actionListener: ActionListener<AcknowledgedResponse>) {
         if (!indexManagementIndexExists()) {
             val indexRequest = CreateIndexRequest(INDEX_MANAGEMENT_INDEX)
-                .mapping(_DOC, indexManagementMappings, XContentType.JSON)
+                .mapping(indexManagementMappings)
                 .settings(Settings.builder().put(INDEX_HIDDEN, true).build())
             client.create(
                 indexRequest,
@@ -91,6 +74,26 @@ class IndexManagementIndices(
             )
         } else {
             IndexUtils.checkAndUpdateConfigIndexMapping(clusterService.state(), client, actionListener)
+        }
+    }
+
+    suspend fun checkAndUpdateIMConfigIndex(logger: Logger): Boolean {
+        val response: AcknowledgedResponse = suspendCoroutine { cont ->
+            checkAndUpdateIMConfigIndex(
+                object : ActionListener<AcknowledgedResponse> {
+                    override fun onResponse(response: AcknowledgedResponse) = cont.resume(response)
+                    override fun onFailure(e: Exception) = cont.resumeWithException(e)
+                }
+            )
+        }
+        if (response.isAcknowledged) {
+            return true
+        } else {
+            logger.error("Unable to create or update $INDEX_MANAGEMENT_INDEX with newest mapping.")
+            throw OpenSearchStatusException(
+                "Unable to create or update $INDEX_MANAGEMENT_INDEX with newest mapping.",
+                RestStatus.INTERNAL_SERVER_ERROR
+            )
         }
     }
 
@@ -162,7 +165,7 @@ class IndexManagementIndices(
         if (existsResponse.isExists) return true
 
         val request = CreateIndexRequest(index)
-            .mapping(_DOC, indexStateManagementHistoryMappings, XContentType.JSON)
+            .mapping(indexStateManagementHistoryMappings)
             .settings(
                 Settings.builder()
                     .put(INDEX_HIDDEN, true)

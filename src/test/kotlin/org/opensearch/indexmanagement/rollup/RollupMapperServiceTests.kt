@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.rollup
@@ -45,7 +24,6 @@ import org.opensearch.cluster.service.ClusterService
 import org.opensearch.common.collect.ImmutableOpenMap
 import org.opensearch.common.xcontent.XContentType
 import org.opensearch.indexmanagement.rollup.model.RollupJobValidationResult
-import org.opensearch.indexmanagement.util._DOC
 import org.opensearch.test.OpenSearchTestCase
 import java.time.Instant
 
@@ -113,7 +91,7 @@ class RollupMapperServiceTests : OpenSearchTestCase() {
         val client = getClient(
             getAdminClient(
                 getIndicesAdminClient(
-                    getMappingsResponse = getMappingResponse(sourceIndex, "custom_type"),
+                    getMappingsResponse = getMappingResponse(sourceIndex),
                     getMappingsException = null
                 )
             )
@@ -151,7 +129,7 @@ class RollupMapperServiceTests : OpenSearchTestCase() {
         val client = getClient(
             getAdminClient(
                 getIndicesAdminClient(
-                    getMappingsResponse = getMappingResponse(sourceIndex, "custom_type", true),
+                    getMappingsResponse = getMappingResponse(sourceIndex, true),
                     getMappingsException = null
                 )
             )
@@ -312,23 +290,19 @@ class RollupMapperServiceTests : OpenSearchTestCase() {
     private fun getIndexNameExpressionResolver(concreteIndices: List<String>): IndexNameExpressionResolver =
         mock { on { concreteIndexNames(any(), any(), anyBoolean(), anyVararg<String>()) } doReturn concreteIndices.toTypedArray() }
 
-    private fun getMappingResponse(indexName: String, mappingType: String = _DOC, emptyMapping: Boolean = false): GetMappingsResponse {
-        val docMappings = if (emptyMapping) {
+    private fun getMappingResponse(indexName: String, emptyMapping: Boolean = false): GetMappingsResponse {
+        val mappings = if (emptyMapping) {
             ImmutableOpenMap.Builder<String, MappingMetadata>().build()
         } else {
             val mappingSourceMap = createParser(
                 XContentType.JSON.xContent(),
                 javaClass.classLoader.getResource("mappings/kibana-sample-data.json").readText()
             ).map()
-            val mappingMetadata = MappingMetadata(mappingType, mappingSourceMap)
+            val mappingMetadata = MappingMetadata("_doc", mappingSourceMap) // it seems it still expects a type, i.e. _doc now
             ImmutableOpenMap.Builder<String, MappingMetadata>()
-                .fPut(mappingType, mappingMetadata)
+                .fPut(indexName, mappingMetadata)
                 .build()
         }
-
-        val mappings = ImmutableOpenMap.Builder<String, ImmutableOpenMap<String, MappingMetadata>>()
-            .fPut(indexName, docMappings)
-            .build()
 
         return GetMappingsResponse(mappings)
     }

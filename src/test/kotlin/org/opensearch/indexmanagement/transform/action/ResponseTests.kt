@@ -1,12 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
  */
 
 package org.opensearch.indexmanagement.transform.action
@@ -29,7 +23,8 @@ class ResponseTests : OpenSearchTestCase() {
 
     fun `test explain transform response`() {
         val idsToExplain = randomList(10) { randomAlphaOfLength(10) to randomExplainTransform() }.toMap()
-        val res = ExplainTransformResponse(idsToExplain)
+        val failedToExplain = randomList(10) { randomAlphaOfLength(10) to randomAlphaOfLength(10) }.toMap()
+        val res = ExplainTransformResponse(idsToExplain, failedToExplain)
         val out = BytesStreamOutput().apply { res.writeTo(this) }
         val streamedRes = ExplainTransformResponse(buildStreamInputForTransforms(out))
 

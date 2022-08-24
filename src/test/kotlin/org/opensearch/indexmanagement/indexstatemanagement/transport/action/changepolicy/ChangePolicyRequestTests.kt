@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.transport.action.changepolicy
@@ -30,6 +9,7 @@ import org.opensearch.common.io.stream.BytesStreamOutput
 import org.opensearch.common.io.stream.StreamInput
 import org.opensearch.indexmanagement.indexstatemanagement.model.ChangePolicy
 import org.opensearch.indexmanagement.indexstatemanagement.model.StateFilter
+import org.opensearch.indexmanagement.indexstatemanagement.util.DEFAULT_INDEX_TYPE
 import org.opensearch.test.OpenSearchTestCase
 
 class ChangePolicyRequestTests : OpenSearchTestCase() {
@@ -38,7 +18,7 @@ class ChangePolicyRequestTests : OpenSearchTestCase() {
         val indices = listOf("index1", "index2")
         val stateFilter = StateFilter("state1")
         val changePolicy = ChangePolicy("policyID", "state1", listOf(stateFilter), true)
-        val req = ChangePolicyRequest(indices, changePolicy)
+        val req = ChangePolicyRequest(indices, changePolicy, DEFAULT_INDEX_TYPE)
 
         val out = BytesStreamOutput()
         req.writeTo(out)
@@ -46,5 +26,15 @@ class ChangePolicyRequestTests : OpenSearchTestCase() {
         val newReq = ChangePolicyRequest(sin)
         assertEquals(indices, newReq.indices)
         assertEquals(changePolicy, newReq.changePolicy)
+    }
+
+    fun `test change policy request with non default index type and multiple indices fails`() {
+        val indices = listOf("index1", "index2")
+        val stateFilter = StateFilter("state1")
+        val changePolicy = ChangePolicy("policyID", "state1", listOf(stateFilter), true)
+        val req = ChangePolicyRequest(indices, changePolicy, "non-existent-index-type")
+        val actualException: String? = req.validate()?.validationErrors()?.firstOrNull()
+        val expectedException: String = ChangePolicyRequest.MULTIPLE_INDICES_CUSTOM_INDEX_TYPE_ERROR
+        assertEquals("Add policy request should have failed validation with specific exception", actualException, expectedException)
     }
 }

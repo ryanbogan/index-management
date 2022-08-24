@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.rollup.action.index
@@ -44,10 +23,12 @@ import org.opensearch.common.settings.Settings
 import org.opensearch.common.xcontent.NamedXContentRegistry
 import org.opensearch.common.xcontent.ToXContent
 import org.opensearch.common.xcontent.XContentFactory.jsonBuilder
+import org.opensearch.commons.ConfigConstants
 import org.opensearch.commons.authuser.User
 import org.opensearch.indexmanagement.IndexManagementIndices
 import org.opensearch.indexmanagement.IndexManagementPlugin.Companion.INDEX_MANAGEMENT_INDEX
 import org.opensearch.indexmanagement.rollup.model.Rollup
+import org.opensearch.indexmanagement.rollup.util.RollupFieldValueExpressionResolver
 import org.opensearch.indexmanagement.rollup.util.parseRollup
 import org.opensearch.indexmanagement.settings.IndexManagementSettings
 import org.opensearch.indexmanagement.util.IndexUtils
@@ -59,6 +40,7 @@ import org.opensearch.tasks.Task
 import org.opensearch.transport.TransportService
 
 // TODO: Field and mappings validations of source and target index, i.e. reject a histogram agg on example_field if its not possible
+@Suppress("LongParameterList")
 class TransportIndexRollupAction @Inject constructor(
     transportService: TransportService,
     val client: Client,
@@ -93,6 +75,11 @@ class TransportIndexRollupAction @Inject constructor(
     ) {
 
         fun start() {
+            log.debug(
+                "User and roles string from thread context: ${client.threadPool().threadContext.getTransient<String>(
+                    ConfigConstants.OPENSEARCH_SECURITY_USER_INFO_THREAD_CONTEXT
+                )}"
+            )
             client.threadPool().threadContext.stashContext().use {
                 if (!validateUserConfiguration(user, filterByEnabled, actionListener)) {
                     return
@@ -105,6 +92,14 @@ class TransportIndexRollupAction @Inject constructor(
             if (response.isAcknowledged) {
                 log.info("Successfully created or updated $INDEX_MANAGEMENT_INDEX with newest mappings.")
                 if (request.opType() == DocWriteRequest.OpType.CREATE) {
+                    if (!validateTargetIndexName()) {
+                        return actionListener.onFailure(
+                            OpenSearchStatusException(
+                                "target_index value is invalid: ${request.rollup.targetIndex}",
+                                RestStatus.BAD_REQUEST
+                            )
+                        )
+                    }
                     putRollup()
                 } else {
                     getRollup()
@@ -141,6 +136,14 @@ class TransportIndexRollupAction @Inject constructor(
             val modified = modifiedImmutableProperties(rollup, request.rollup)
             if (modified.isNotEmpty()) {
                 return actionListener.onFailure(OpenSearchStatusException("Not allowed to modify $modified", RestStatus.BAD_REQUEST))
+            }
+            if (!validateTargetIndexName()) {
+                return actionListener.onFailure(
+                    OpenSearchStatusException(
+                        "target_index value is invalid: ${request.rollup.targetIndex}",
+                        RestStatus.BAD_REQUEST
+                    )
+                )
             }
             putRollup()
         }
@@ -185,6 +188,11 @@ class TransportIndexRollupAction @Inject constructor(
                     }
                 }
             )
+        }
+
+        private fun validateTargetIndexName(): Boolean {
+            val targetIndexResolvedName = RollupFieldValueExpressionResolver.resolve(request.rollup, request.rollup.targetIndex)
+            return targetIndexResolvedName.contains("*") == false && targetIndexResolvedName.contains("?") == false
         }
     }
 }

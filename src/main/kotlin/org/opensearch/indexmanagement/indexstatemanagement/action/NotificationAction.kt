@@ -1,54 +1,63 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.action
 
-import org.opensearch.client.Client
-import org.opensearch.cluster.service.ClusterService
-import org.opensearch.common.settings.Settings
-import org.opensearch.indexmanagement.indexstatemanagement.model.ManagedIndexMetaData
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.NotificationActionConfig
-import org.opensearch.indexmanagement.indexstatemanagement.step.Step
+import org.opensearch.common.io.stream.StreamOutput
+import org.opensearch.common.xcontent.ToXContent
+import org.opensearch.common.xcontent.XContentBuilder
+import org.opensearch.indexmanagement.common.model.notification.Channel
+import org.opensearch.indexmanagement.indexstatemanagement.model.destination.Destination
 import org.opensearch.indexmanagement.indexstatemanagement.step.notification.AttemptNotificationStep
-import org.opensearch.script.ScriptService
+import org.opensearch.indexmanagement.spi.indexstatemanagement.Action
+import org.opensearch.indexmanagement.spi.indexstatemanagement.Step
+import org.opensearch.indexmanagement.spi.indexstatemanagement.model.StepContext
+import org.opensearch.script.Script
 
 class NotificationAction(
-    clusterService: ClusterService,
-    scriptService: ScriptService,
-    client: Client,
-    settings: Settings,
-    managedIndexMetaData: ManagedIndexMetaData,
-    config: NotificationActionConfig
-) : Action(ActionConfig.ActionType.NOTIFICATION, config, managedIndexMetaData) {
+    val destination: Destination?,
+    val channel: Channel?,
+    val messageTemplate: Script,
+    index: Int
+) : Action(name, index) {
 
-    private val attemptNotificationStep = AttemptNotificationStep(clusterService, scriptService, client, settings, config, managedIndexMetaData)
+    init {
+        require(destination != null || channel != null) { "Notification must contain a destination or channel" }
+        require(destination == null || channel == null) { "Notification can only contain a single destination or channel" }
+        require(messageTemplate.lang == MUSTACHE) { "Notification message template must be a mustache script" }
+    }
+
+    private val attemptNotificationStep = AttemptNotificationStep(this)
     private val steps = listOf(attemptNotificationStep)
+
+    override fun getStepToExecute(context: StepContext): Step {
+        return attemptNotificationStep
+    }
 
     override fun getSteps(): List<Step> = steps
 
-    override fun getStepToExecute(): Step = attemptNotificationStep
+    override fun populateAction(builder: XContentBuilder, params: ToXContent.Params) {
+        builder.startObject(type)
+        if (destination != null) builder.field(DESTINATION_FIELD, destination)
+        if (channel != null) builder.field(CHANNEL_FIELD, channel)
+        builder.field(MESSAGE_TEMPLATE_FIELD, messageTemplate)
+        builder.endObject()
+    }
+
+    override fun populateAction(out: StreamOutput) {
+        out.writeOptionalWriteable(destination)
+        out.writeOptionalWriteable(channel)
+        messageTemplate.writeTo(out)
+        out.writeInt(actionIndex)
+    }
+
+    companion object {
+        const val name = "notification"
+        const val DESTINATION_FIELD = "destination"
+        const val CHANNEL_FIELD = "channel"
+        const val MESSAGE_TEMPLATE_FIELD = "message_template"
+        const val MUSTACHE = "mustache"
+    }
 }

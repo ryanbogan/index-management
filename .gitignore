@@ -10,3 +10,8 @@ out/
 http
 .project
 .settings
+src/test/resources/job-scheduler/
+src/test/resources/bwc/
+bin/
+spi/bin/
+src/test/resources/notifications*

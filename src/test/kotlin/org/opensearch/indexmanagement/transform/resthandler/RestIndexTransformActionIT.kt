@@ -1,12 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
  */
 
 package org.opensearch.indexmanagement.transform.resthandler
@@ -17,8 +11,8 @@ import org.opensearch.indexmanagement.IndexManagementPlugin.Companion.INDEX_MANA
 import org.opensearch.indexmanagement.IndexManagementPlugin.Companion.TRANSFORM_BASE_URI
 import org.opensearch.indexmanagement.makeRequest
 import org.opensearch.indexmanagement.transform.TransformRestTestCase
-import org.opensearch.indexmanagement.transform.model.Transform
 import org.opensearch.indexmanagement.transform.randomTransform
+import org.opensearch.indexmanagement.util.NO_ID
 import org.opensearch.rest.RestStatus
 import org.opensearch.test.junit.annotations.TestLogging
 
@@ -40,7 +34,7 @@ class RestIndexTransformActionIT : TransformRestTestCase() {
         assertEquals("Create transform failed", RestStatus.CREATED, response.restStatus())
         val responseBody = response.asMap()
         val createdId = responseBody["_id"] as String
-        assertNotEquals("Response is missing Id", Transform.NO_ID, createdId)
+        assertNotEquals("Response is missing Id", NO_ID, createdId)
         assertEquals("Not same id", transform.id, createdId)
         assertEquals("Incorrect Location header", "$TRANSFORM_BASE_URI/$createdId", response.getHeader("Location"))
     }
@@ -92,5 +86,33 @@ class RestIndexTransformActionIT : TransformRestTestCase() {
         val expectedMap = expected.map()
 
         assertEquals("Mappings are different", expectedMap, mappingsMap)
+    }
+
+    @Throws(Exception::class)
+    fun `test updating transform continuous field fails`() {
+        val transform = createRandomTransform()
+        try {
+            client().makeRequest(
+                "PUT",
+                "$TRANSFORM_BASE_URI/${transform.id}?refresh=true&if_seq_no=${transform.seqNo}&if_primary_term=${transform.primaryTerm}",
+                emptyMap(),
+                transform.copy(continuous = !transform.continuous, pageSize = 50).toHttpEntity() // Lower page size to make sure that doesn't throw an error first
+            )
+            fail("Expected 405 Method Not Allowed response")
+        } catch (e: ResponseException) {
+            assertEquals("Unexpected status", RestStatus.BAD_REQUEST, e.response.restStatus())
+            val actualMessage = e.response.asMap()
+            val expectedErrorMessage = mapOf(
+                "error" to mapOf(
+                    "root_cause" to listOf<Map<String, Any>>(
+                        mapOf("type" to "status_exception", "reason" to "Not allowed to modify [continuous]")
+                    ),
+                    "type" to "status_exception",
+                    "reason" to "Not allowed to modify [continuous]"
+                ),
+                "status" to 400
+            )
+            assertEquals(expectedErrorMessage, actualMessage)
+        }
     }
 }

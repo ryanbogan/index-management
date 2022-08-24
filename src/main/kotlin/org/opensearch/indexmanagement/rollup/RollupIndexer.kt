@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.rollup
@@ -44,6 +23,7 @@ import org.opensearch.indexmanagement.rollup.model.Rollup
 import org.opensearch.indexmanagement.rollup.model.RollupStats
 import org.opensearch.indexmanagement.rollup.settings.RollupSettings.Companion.ROLLUP_INGEST_BACKOFF_COUNT
 import org.opensearch.indexmanagement.rollup.settings.RollupSettings.Companion.ROLLUP_INGEST_BACKOFF_MILLIS
+import org.opensearch.indexmanagement.rollup.util.RollupFieldValueExpressionResolver
 import org.opensearch.indexmanagement.rollup.util.getInitialDocValues
 import org.opensearch.indexmanagement.util.IndexUtils.Companion.ODFE_MAGIC_NULL
 import org.opensearch.indexmanagement.util.IndexUtils.Companion.hashToFixedSize
@@ -68,8 +48,7 @@ class RollupIndexer(
         BackoffPolicy.constantBackoff(ROLLUP_INGEST_BACKOFF_MILLIS.get(settings), ROLLUP_INGEST_BACKOFF_COUNT.get(settings))
 
     init {
-        clusterService.clusterSettings.addSettingsUpdateConsumer(ROLLUP_INGEST_BACKOFF_MILLIS, ROLLUP_INGEST_BACKOFF_COUNT) {
-            millis, count ->
+        clusterService.clusterSettings.addSettingsUpdateConsumer(ROLLUP_INGEST_BACKOFF_MILLIS, ROLLUP_INGEST_BACKOFF_COUNT) { millis, count ->
             retryIngestPolicy = BackoffPolicy.constantBackoff(millis, count)
         }
     }
@@ -79,7 +58,7 @@ class RollupIndexer(
         try {
             var requestsToRetry = convertResponseToRequests(rollup, internalComposite)
             var stats = RollupStats(0, 0, requestsToRetry.size.toLong(), 0, 0)
-            var nonRetryableFailures = mutableListOf<BulkItemResponse>()
+            val nonRetryableFailures = mutableListOf<BulkItemResponse>()
             if (requestsToRetry.isNotEmpty()) {
                 retryIngestPolicy.retry(logger, listOf(RestStatus.TOO_MANY_REQUESTS)) {
                     if (it.seconds >= (Rollup.ROLLUP_LOCK_DURATION_SECONDS / 2)) {
@@ -145,7 +124,8 @@ class RollupIndexer(
                 }
             }
             mapOfKeyValues.putAll(aggResults)
-            val indexRequest = IndexRequest(job.targetIndex)
+            val targetIndexResolvedName = RollupFieldValueExpressionResolver.resolve(job, job.targetIndex)
+            val indexRequest = IndexRequest(targetIndexResolvedName)
                 .id(documentId)
                 .source(mapOfKeyValues, XContentType.JSON)
             requests.add(indexRequest)

@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.rollup
@@ -42,7 +21,6 @@ import org.opensearch.cluster.metadata.IndexNameExpressionResolver
 import org.opensearch.cluster.metadata.MappingMetadata
 import org.opensearch.cluster.service.ClusterService
 import org.opensearch.common.settings.Settings
-import org.opensearch.common.xcontent.XContentType
 import org.opensearch.indexmanagement.IndexManagementIndices
 import org.opensearch.indexmanagement.common.model.dimension.DateHistogram
 import org.opensearch.indexmanagement.common.model.dimension.Histogram
@@ -54,10 +32,10 @@ import org.opensearch.indexmanagement.rollup.model.Rollup
 import org.opensearch.indexmanagement.rollup.model.RollupJobValidationResult
 import org.opensearch.indexmanagement.rollup.settings.LegacyOpenDistroRollupSettings
 import org.opensearch.indexmanagement.rollup.settings.RollupSettings
+import org.opensearch.indexmanagement.rollup.util.RollupFieldValueExpressionResolver
 import org.opensearch.indexmanagement.rollup.util.isRollupIndex
 import org.opensearch.indexmanagement.util.IndexUtils.Companion._META
 import org.opensearch.indexmanagement.util.IndexUtils.Companion.getFieldFromMappings
-import org.opensearch.indexmanagement.util._DOC
 import org.opensearch.transport.RemoteTransportException
 
 // TODO: Validation of fields across source and target indices overwriting existing rollup data
@@ -75,14 +53,14 @@ class RollupMapperService(
     // If the index already exists we need to verify it's a rollup index,
     // confirm it does not conflict with existing jobs and is a valid job
     @Suppress("ReturnCount")
-    private suspend fun validateAndAttemptToUpdateTargetIndex(rollup: Rollup): RollupJobValidationResult {
-        if (!isRollupIndex(rollup.targetIndex, clusterService.state())) {
-            return RollupJobValidationResult.Invalid("Target index [${rollup.targetIndex}] is a non rollup index")
+    private suspend fun validateAndAttemptToUpdateTargetIndex(rollup: Rollup, targetIndexResolvedName: String): RollupJobValidationResult {
+        if (!isRollupIndex(targetIndexResolvedName, clusterService.state())) {
+            return RollupJobValidationResult.Invalid("Target index [$targetIndexResolvedName] is a non rollup index")
         }
 
-        return when (val jobExistsResult = jobExistsInRollupIndex(rollup)) {
+        return when (val jobExistsResult = jobExistsInRollupIndex(rollup, targetIndexResolvedName)) {
             is RollupJobValidationResult.Valid -> jobExistsResult
-            is RollupJobValidationResult.Invalid -> updateRollupIndexMappings(rollup)
+            is RollupJobValidationResult.Invalid -> updateRollupIndexMappings(rollup, targetIndexResolvedName)
             is RollupJobValidationResult.Failure -> jobExistsResult
         }
     }
@@ -92,14 +70,15 @@ class RollupMapperService(
     // TODO: error handling
     @Suppress("ReturnCount")
     suspend fun attemptCreateRollupTargetIndex(job: Rollup, hasLegacyPlugin: Boolean): RollupJobValidationResult {
-        if (indexExists(job.targetIndex)) {
-            return validateAndAttemptToUpdateTargetIndex(job)
+        val targetIndexResolvedName = RollupFieldValueExpressionResolver.resolve(job, job.targetIndex)
+        if (indexExists(targetIndexResolvedName)) {
+            return validateAndAttemptToUpdateTargetIndex(job, targetIndexResolvedName)
         } else {
-            val errorMessage = "Failed to create target index [${job.targetIndex}]"
+            val errorMessage = "Failed to create target index [$targetIndexResolvedName]"
             return try {
-                val response = createTargetIndex(job, hasLegacyPlugin)
+                val response = createTargetIndex(targetIndexResolvedName, hasLegacyPlugin)
                 if (response.isAcknowledged) {
-                    updateRollupIndexMappings(job)
+                    updateRollupIndexMappings(job, targetIndexResolvedName)
                 } else {
                     RollupJobValidationResult.Failure(errorMessage)
                 }
@@ -117,15 +96,15 @@ class RollupMapperService(
         }
     }
 
-    private suspend fun createTargetIndex(job: Rollup, hasLegacyPlugin: Boolean): CreateIndexResponse {
+    private suspend fun createTargetIndex(targetIndexName: String, hasLegacyPlugin: Boolean): CreateIndexResponse {
         val settings = if (hasLegacyPlugin) {
             Settings.builder().put(LegacyOpenDistroRollupSettings.ROLLUP_INDEX.key, true).build()
         } else {
             Settings.builder().put(RollupSettings.ROLLUP_INDEX.key, true).build()
         }
-        val request = CreateIndexRequest(job.targetIndex)
+        val request = CreateIndexRequest(targetIndexName)
             .settings(settings)
-            .mapping(_DOC, IndexManagementIndices.rollupTargetMappings, XContentType.JSON)
+            .mapping(IndexManagementIndices.rollupTargetMappings)
         // TODO: Perhaps we can do better than this for mappings... as it'll be dynamic for rest
         //  Can we read in the actual mappings from the source index and use that?
         //  Can it have issues with metrics? i.e. an int mapping with 3, 5, 6 added up and divided by 3 for avg is 14/3 = 4.6666
@@ -169,13 +148,11 @@ class RollupMapperService(
             }
 
             val indexTypeMappings = res.mappings[index]
-            if (indexTypeMappings.isEmpty) {
+            if (indexTypeMappings == null) {
                 return RollupJobValidationResult.Invalid("Source index [$index] mappings are empty, cannot validate the job.")
             }
 
-            // Starting from 6.0.0 an index can only have one mapping type, but mapping type is still part of the APIs in 7.x, allowing users to
-            // set a custom mapping type. As a result using first mapping type found instead of _DOC mapping type to validate
-            val indexMappingSource = indexTypeMappings.first().value.sourceAsMap
+            val indexMappingSource = indexTypeMappings.sourceAsMap
 
             val issues = mutableSetOf<String>()
             // Validate source fields in dimensions
@@ -229,19 +206,19 @@ class RollupMapperService(
         return field != null
     }
 
-    private suspend fun jobExistsInRollupIndex(rollup: Rollup): RollupJobValidationResult {
-        val res = when (val getMappingsResult = getMappings(rollup.targetIndex)) {
+    private suspend fun jobExistsInRollupIndex(rollup: Rollup, targetIndexResolvedName: String): RollupJobValidationResult {
+        val res = when (val getMappingsResult = getMappings(targetIndexResolvedName)) {
             is GetMappingsResult.Success -> getMappingsResult.response
             is GetMappingsResult.Failure ->
                 return RollupJobValidationResult.Failure(getMappingsResult.message, getMappingsResult.cause)
         }
 
-        val indexMapping: MappingMetadata = res.mappings[rollup.targetIndex][_DOC]
+        val indexMapping: MappingMetadata = res.mappings[targetIndexResolvedName]
 
         return if (((indexMapping.sourceAsMap?.get(_META) as Map<*, *>?)?.get(ROLLUPS) as Map<*, *>?)?.containsKey(rollup.id) == true) {
             RollupJobValidationResult.Valid
         } else {
-            RollupJobValidationResult.Invalid("Rollup job [${rollup.id}] does not exist in rollup index [${rollup.targetIndex}]")
+            RollupJobValidationResult.Invalid("Rollup job [${rollup.id}] does not exist in rollup index [$targetIndexResolvedName]")
         }
     }
 
@@ -272,15 +249,15 @@ class RollupMapperService(
     private fun indexExists(index: String): Boolean = clusterService.state().routingTable.hasIndex(index)
 
     // TODO: error handling - can RemoteTransportException happen here?
-    // TODO: The use of the master transport action UpdateRollupMappingAction will prevent
+    // TODO: The use of the cluster manager transport action UpdateRollupMappingAction will prevent
     //   overwriting an existing rollup job _meta by checking for the job id
     //   but there is still a race condition if two jobs are added at the same time for the
     //   same target index. There is a small time window after get mapping and put mappings
     //   where they can both get the same mapping state and only add their own job, meaning one
     //   of the jobs won't be added to the target index _meta
     @Suppress("BlockingMethodInNonBlockingContext", "ReturnCount")
-    private suspend fun updateRollupIndexMappings(rollup: Rollup): RollupJobValidationResult {
-        val errorMessage = "Failed to update mappings of target index [${rollup.targetIndex}] with rollup job"
+    private suspend fun updateRollupIndexMappings(rollup: Rollup, targetIndexResolvedName: String): RollupJobValidationResult {
+        val errorMessage = "Failed to update mappings of target index [$targetIndexResolvedName] with rollup job"
         try {
             val response = withContext(Dispatchers.IO) {
                 val resp: AcknowledgedResponse = client.suspendUntil {

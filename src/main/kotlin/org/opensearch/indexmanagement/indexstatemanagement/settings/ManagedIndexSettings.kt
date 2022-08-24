@@ -1,43 +1,23 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.indexstatemanagement.settings
 
 import org.opensearch.common.settings.Setting
 import org.opensearch.common.unit.TimeValue
-import org.opensearch.indexmanagement.indexstatemanagement.model.action.ActionConfig
+import org.opensearch.indexmanagement.IndexManagementPlugin.Companion.INDEX_MANAGEMENT_INDEX
 import java.util.function.Function
 
+@Suppress("UtilityClassWithPublicConstructor")
 class ManagedIndexSettings {
     companion object {
         const val DEFAULT_ISM_ENABLED = true
-        const val DEFAULT_METADATA_SERVICE_ENABLED = true
+        const val DEFAULT_TEMPLATE_MIGRATION_TIMESTAMP = 0L
         const val DEFAULT_JOB_INTERVAL = 5
         const val DEFAULT_JITTER = 0.6
-        private val ALLOW_LIST_ALL = ActionConfig.ActionType.values().toList().map { it.type }
+        const val DEFAULT_RESTRICTED_PATTERN = "\\.opendistro_security|\\.kibana.*|\\$INDEX_MANAGEMENT_INDEX"
         val ALLOW_LIST_NONE = emptyList<String>()
         val SNAPSHOT_DENY_LIST_NONE = emptyList<String>()
         const val HOST_DENY_LIST = "opendistro.destination.host.deny_list"
@@ -45,6 +25,28 @@ class ManagedIndexSettings {
         val INDEX_STATE_MANAGEMENT_ENABLED: Setting<Boolean> = Setting.boolSetting(
             "plugins.index_state_management.enabled",
             LegacyOpenDistroManagedIndexSettings.INDEX_STATE_MANAGEMENT_ENABLED,
+            Setting.Property.NodeScope,
+            Setting.Property.Dynamic
+        )
+
+        // 0: migration is going on
+        // 1: migration succeed
+        // -1: migration failed
+        val METADATA_SERVICE_STATUS: Setting<Int> = Setting.intSetting(
+            "plugins.index_state_management.metadata_migration.status",
+            LegacyOpenDistroManagedIndexSettings.METADATA_SERVICE_STATUS,
+            Setting.Property.NodeScope,
+            Setting.Property.Dynamic
+        )
+
+        // 0: enabled, use onClusterManager time as ISM template last_updated_time
+        // -1: migration ended successfully
+        // -2: migration ended unsuccessfully
+        // >0: use this setting (epoch millis) as ISM template last_updated_time
+        val TEMPLATE_MIGRATION_CONTROL: Setting<Long> = Setting.longSetting(
+            "plugins.index_state_management.template_migration.control",
+            LegacyOpenDistroManagedIndexSettings.TEMPLATE_MIGRATION_CONTROL,
+            -2L,
             Setting.Property.NodeScope,
             Setting.Property.Dynamic
         )
@@ -72,14 +74,14 @@ class ManagedIndexSettings {
 
         val ROLLOVER_SKIP: Setting<Boolean> = Setting.boolSetting(
             "index.plugins.index_state_management.rollover_skip",
-            false,
+            LegacyOpenDistroManagedIndexSettings.ROLLOVER_SKIP,
             Setting.Property.IndexScope,
             Setting.Property.Dynamic
         )
 
         val AUTO_MANAGE: Setting<Boolean> = Setting.boolSetting(
             "index.plugins.index_state_management.auto_manage",
-            true,
+            LegacyOpenDistroManagedIndexSettings.AUTO_MANAGE,
             Setting.Property.IndexScope,
             Setting.Property.Dynamic
         )
@@ -186,6 +188,13 @@ class ManagedIndexSettings {
             DEFAULT_JITTER,
             0.0,
             1.0,
+            Setting.Property.NodeScope,
+            Setting.Property.Dynamic
+        )
+
+        val RESTRICTED_INDEX_PATTERN = Setting.simpleString(
+            "plugins.index_state_management.restricted_index_pattern",
+            LegacyOpenDistroManagedIndexSettings.RESTRICTED_INDEX_PATTERN,
             Setting.Property.NodeScope,
             Setting.Property.Dynamic
         )

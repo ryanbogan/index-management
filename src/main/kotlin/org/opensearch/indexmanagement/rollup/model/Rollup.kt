@@ -1,27 +1,6 @@
 /*
+ * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
- *
- * The OpenSearch Contributors require contributions made to
- * this file be licensed under the Apache-2.0 license or a
- * compatible open source license.
- *
- * Modifications Copyright OpenSearch Contributors. See
- * GitHub history for details.
- */
-
-/*
- * Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package org.opensearch.indexmanagement.rollup.model
@@ -46,6 +25,7 @@ import org.opensearch.indexmanagement.opensearchapi.instant
 import org.opensearch.indexmanagement.opensearchapi.optionalTimeField
 import org.opensearch.indexmanagement.opensearchapi.optionalUserField
 import org.opensearch.indexmanagement.util.IndexUtils
+import org.opensearch.indexmanagement.util.NO_ID
 import org.opensearch.indexmanagement.util._ID
 import org.opensearch.jobscheduler.spi.ScheduledJobParameter
 import org.opensearch.jobscheduler.spi.schedule.CronSchedule
@@ -155,7 +135,7 @@ data class Rollup(
         dimensions = sin.let {
             val dimensionsList = mutableListOf<Dimension>()
             val size = it.readVInt()
-            for (i in 0 until size) {
+            repeat(size) { _ ->
                 val type = it.readEnum(Dimension.Type::class.java)
                 dimensionsList.add(
                     when (requireNotNull(type) { "Dimension type cannot be null" }) {
@@ -241,7 +221,6 @@ data class Rollup(
         const val ROLLUP_LOCK_DURATION_SECONDS = 1800L // 30 minutes
         const val ROLLUP_TYPE = "rollup"
         const val ROLLUP_ID_FIELD = "rollup_id"
-        const val NO_ID = ""
         const val ENABLED_FIELD = "enabled"
         const val SCHEMA_VERSION_FIELD = "schema_version"
         const val SCHEDULE_FIELD = "schedule"
@@ -262,7 +241,10 @@ data class Rollup(
         const val MINIMUM_PAGE_SIZE = 1
         const val MAXIMUM_PAGE_SIZE = 10_000
         const val ROLLUP_DOC_ID_FIELD = "$ROLLUP_TYPE.$_ID"
-        const val ROLLUP_DOC_COUNT_FIELD = "$ROLLUP_TYPE._doc_count"
+        /*
+        *  _doc_count has to be in root of document so that core's aggregator would pick it up and use it
+        * */
+        const val ROLLUP_DOC_COUNT_FIELD = "_doc_count"
         const val ROLLUP_DOC_SCHEMA_VERSION_FIELD = "$ROLLUP_TYPE._$SCHEMA_VERSION_FIELD"
         const val USER_FIELD = "user"
 
